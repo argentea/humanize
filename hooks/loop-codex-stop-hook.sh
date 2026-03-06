@@ -2,8 +2,8 @@
 #
 # Stop Hook for RLCR loop
 #
-# Intercepts Claude's exit attempts and uses Codex to review work.
-# If Codex doesn't confirm completion, blocks exit and feeds review back.
+# Intercepts Claude's exit attempts and uses Gemini to review work.
+# If Gemini doesn't confirm completion, blocks exit and feeds review back.
 #
 # State directory: .humanize/rlcr/<timestamp>/
 # State file: state.md (current_round, max_iterations, codex config)
@@ -18,8 +18,8 @@ set -euo pipefail
 # Default Configuration
 # ========================================
 
-# DEFAULT_CODEX_MODEL and DEFAULT_CODEX_EFFORT are provided by loop-common.sh (sourced below)
-DEFAULT_CODEX_TIMEOUT=5400
+# DEFAULT_GEMINI_MODEL is provided by loop-common.sh (sourced below)
+DEFAULT_GEMINI_TIMEOUT=5400
 
 # ========================================
 # Read Hook Input
@@ -112,36 +112,14 @@ MAX_ITERATIONS="$STATE_MAX_ITERATIONS"
 PUSH_EVERY_ROUND="$STATE_PUSH_EVERY_ROUND"
 FULL_REVIEW_ROUND="${STATE_FULL_REVIEW_ROUND:-5}"
 REVIEW_STARTED="$STATE_REVIEW_STARTED"
-# RLCR mode split:
-# - codex exec uses state codex_model/codex_effort (from loop-common.sh defaults)
-# - codex review uses same model, with fixed effort "high"
-CODEX_EXEC_MODEL="${STATE_CODEX_MODEL:-$DEFAULT_CODEX_MODEL}"
-CODEX_EXEC_EFFORT="${STATE_CODEX_EFFORT:-$DEFAULT_CODEX_EFFORT}"
-CODEX_REVIEW_MODEL="${STATE_CODEX_MODEL:-$DEFAULT_CODEX_MODEL}"
-CODEX_REVIEW_EFFORT="high"
-CODEX_TIMEOUT="${STATE_CODEX_TIMEOUT:-${CODEX_TIMEOUT:-$DEFAULT_CODEX_TIMEOUT}}"
-ASK_CODEX_QUESTION="${STATE_ASK_CODEX_QUESTION:-false}"
+GEMINI_MODEL="${STATE_GEMINI_MODEL:-$DEFAULT_GEMINI_MODEL}"
+GEMINI_TIMEOUT="${STATE_GEMINI_TIMEOUT:-$DEFAULT_GEMINI_TIMEOUT}"
+ASK_GEMINI_QUESTION="${STATE_ASK_GEMINI_QUESTION:-false}"
 AGENT_TEAMS="${STATE_AGENT_TEAMS:-false}"
 
-# Re-validate Codex Model and Effort for YAML safety (in case state.md was manually edited)
-# Use same validation patterns as setup-rlcr-loop.sh
-if [[ ! "$CODEX_EXEC_MODEL" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-    echo "Error: Invalid codex_model in state file: $CODEX_EXEC_MODEL" >&2
-    end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_UNEXPECTED"
-    exit 0
-fi
-if [[ ! "$CODEX_EXEC_EFFORT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    echo "Error: Invalid codex_effort in state file: $CODEX_EXEC_EFFORT" >&2
-    end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_UNEXPECTED"
-    exit 0
-fi
-if [[ ! "$CODEX_REVIEW_MODEL" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-    echo "Error: Invalid review model in hook config: $CODEX_REVIEW_MODEL" >&2
-    end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_UNEXPECTED"
-    exit 0
-fi
-if [[ ! "$CODEX_REVIEW_EFFORT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    echo "Error: Invalid review effort in hook config: $CODEX_REVIEW_EFFORT" >&2
+# Validate Gemini model for YAML safety (in case state.md was manually edited)
+if [[ ! "$GEMINI_MODEL" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    echo "Error: Invalid gemini_model in state file: $GEMINI_MODEL" >&2
     end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_UNEXPECTED"
     exit 0
 fi
@@ -805,6 +783,17 @@ REVIEW_RESULT_FILE="$LOOP_DIR/round-${CURRENT_ROUND}-review-result.md"
 
 SUMMARY_CONTENT=$(cat "$SUMMARY_FILE")
 
+# Inline plan and goal-tracker content for Gemini (which cannot read files autonomously)
+PLAN_CONTENT=""
+if [[ -n "$PLAN_FILE" && -f "$PROJECT_ROOT/$PLAN_FILE" ]]; then
+    PLAN_CONTENT=$(cat "$PROJECT_ROOT/$PLAN_FILE")
+fi
+
+GOAL_TRACKER_CONTENT=""
+if [[ -f "$GOAL_TRACKER_FILE" ]]; then
+    GOAL_TRACKER_CONTENT=$(cat "$GOAL_TRACKER_FILE")
+fi
+
 # Shared prompt section for Goal Tracker Update Requests (used in both Full Alignment and Regular reviews)
 GOAL_TRACKER_SECTION_FALLBACK="## Goal Tracker Updates
 If Claude's summary includes a Goal Tracker Update Request section, apply the requested changes to {{GOAL_TRACKER_FILE}}."
@@ -859,8 +848,10 @@ if [[ "$FULL_ALIGNMENT_CHECK" == "true" ]]; then
     load_and_render_safe "$TEMPLATE_DIR" "codex/full-alignment-review.md" "$FULL_ALIGNMENT_FALLBACK" \
         "CURRENT_ROUND=$CURRENT_ROUND" \
         "PLAN_FILE=$PLAN_FILE" \
+        "PLAN_CONTENT=$PLAN_CONTENT" \
         "SUMMARY_CONTENT=$SUMMARY_CONTENT" \
         "GOAL_TRACKER_FILE=$GOAL_TRACKER_FILE" \
+        "GOAL_TRACKER_CONTENT=$GOAL_TRACKER_CONTENT" \
         "DOCS_PATH=$DOCS_PATH" \
         "GOAL_TRACKER_UPDATE_SECTION=$GOAL_TRACKER_UPDATE_SECTION" \
         "COMPLETED_ITERATIONS=$COMPLETED_ITERATIONS" \
@@ -871,13 +862,14 @@ if [[ "$FULL_ALIGNMENT_CHECK" == "true" ]]; then
 
 else
     # Regular review prompt with goal alignment section
-    # Note: Pass all derived variables for consistency with full alignment template
     load_and_render_safe "$TEMPLATE_DIR" "codex/regular-review.md" "$REGULAR_REVIEW_FALLBACK" \
         "CURRENT_ROUND=$CURRENT_ROUND" \
         "PLAN_FILE=$PLAN_FILE" \
+        "PLAN_CONTENT=$PLAN_CONTENT" \
         "PROMPT_FILE=$PROMPT_FILE" \
         "SUMMARY_CONTENT=$SUMMARY_CONTENT" \
         "GOAL_TRACKER_FILE=$GOAL_TRACKER_FILE" \
+        "GOAL_TRACKER_CONTENT=$GOAL_TRACKER_CONTENT" \
         "DOCS_PATH=$DOCS_PATH" \
         "GOAL_TRACKER_UPDATE_SECTION=$GOAL_TRACKER_UPDATE_SECTION" \
         "COMPLETED_ITERATIONS=$COMPLETED_ITERATIONS" \
@@ -888,20 +880,20 @@ else
 fi
 
 # ========================================
-# Shared Setup: Cache Directory and Codex Arguments
+# Shared Setup: Cache Directory and Gemini Arguments
 # ========================================
 # Initialize these before the REVIEW_STARTED guard so they are available in both
-# impl phase (codex exec) and review phase (codex review)
+# impl phase (gemini summary review) and review phase (gemini code review)
 
-# First, check if codex command exists
-if ! command -v codex &>/dev/null; then
-    REASON="# Codex Not Found
+# First, check if gemini command exists
+if ! command -v gemini &>/dev/null; then
+    REASON="# Gemini Not Found
 
-The 'codex' command is not installed or not in PATH.
-RLCR loop requires Codex CLI to perform code reviews.
+The 'gemini' command is not installed or not in PATH.
+RLCR loop requires Gemini CLI to perform reviews.
 
 **To fix:**
-1. Install Codex CLI: https://github.com/openai/codex
+1. Install Gemini CLI: https://github.com/google-gemini/gemini-cli
 2. Retry the exit
 
 Or use \`/cancel-rlcr-loop\` to end the loop."
@@ -929,144 +921,162 @@ mkdir -p "$CACHE_DIR"
 
 # Note: portable-timeout.sh already sourced at line 52
 
-# Build Codex command arguments for codex exec
-# codex exec uses: -m MODEL, --full-auto (or --dangerously-bypass-approvals-and-sandbox), -C DIR, -c key=value
-CODEX_EXEC_ARGS=("-m" "$CODEX_EXEC_MODEL")
-if [[ -n "$CODEX_EXEC_EFFORT" ]]; then
-    CODEX_EXEC_ARGS+=("-c" "model_reasoning_effort=${CODEX_EXEC_EFFORT}")
-fi
-
-# Determine automation flag based on environment variable
-# Default: Use --full-auto (safe mode with sandbox)
-# If HUMANIZE_CODEX_BYPASS_SANDBOX is "true" or "1": Use --dangerously-bypass-approvals-and-sandbox
-CODEX_AUTO_FLAG="--full-auto"
-if [[ "${HUMANIZE_CODEX_BYPASS_SANDBOX:-}" == "true" ]] || [[ "${HUMANIZE_CODEX_BYPASS_SANDBOX:-}" == "1" ]]; then
-    CODEX_AUTO_FLAG="--dangerously-bypass-approvals-and-sandbox"
-fi
-
-CODEX_EXEC_ARGS+=("$CODEX_AUTO_FLAG" "-C" "$PROJECT_ROOT")
-
-# Build Codex command arguments for codex review
-# codex review uses different format: -c model=xxx -c review_model=xxx -c model_reasoning_effort=xxx
-# No -m, no --full-auto, no -C
-CODEX_REVIEW_ARGS=("-c" "model=${CODEX_REVIEW_MODEL}" "-c" "review_model=${CODEX_REVIEW_MODEL}")
-if [[ -n "$CODEX_REVIEW_EFFORT" ]]; then
-    CODEX_REVIEW_ARGS+=("-c" "model_reasoning_effort=${CODEX_REVIEW_EFFORT}")
-fi
+# Gemini model is already set above (GEMINI_MODEL)
 
 # ========================================
 # Helper Functions for Code Review Phase
 # ========================================
 
-# Run codex review and save debug files
+# Run gemini code review with git diff and changed file contents
 # Arguments: $1=round_number
-# Sets: CODEX_REVIEW_EXIT_CODE, CODEX_REVIEW_LOG_FILE
-# Returns: exit code from codex review
-# Note: codex review --base cannot be used with PROMPT, so we only use --base and -c args
-run_codex_code_review() {
+# Sets: GEMINI_REVIEW_EXIT_CODE, GEMINI_REVIEW_LOG_FILE
+# Returns: exit code from gemini
+run_gemini_code_review() {
     local round="$1"
     local timestamp
     timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    # Determine review base: prefer BASE_COMMIT (captured at loop start) over BASE_BRANCH
-    # Using the fixed commit SHA prevents comparing a branch to itself when working on main,
-    # as the branch ref advances with each commit but the captured SHA stays fixed
+    # Determine review base: prefer BASE_COMMIT over BASE_BRANCH to avoid empty diffs
+    # when working on the base branch itself (branch ref advances with each commit)
     local review_base="${BASE_COMMIT:-$BASE_BRANCH}"
     local review_base_type="branch"
     if [[ -n "$BASE_COMMIT" ]]; then
         review_base_type="commit"
     fi
 
-    CODEX_REVIEW_CMD_FILE="$CACHE_DIR/round-${round}-codex-review.cmd"
-    # Note: codex review outputs everything to stderr, so we capture both stdout and stderr to the log file
-    CODEX_REVIEW_LOG_FILE="$CACHE_DIR/round-${round}-codex-review.log"
+    GEMINI_REVIEW_CMD_FILE="$CACHE_DIR/round-${round}-gemini-review.cmd"
+    GEMINI_REVIEW_LOG_FILE="$CACHE_DIR/round-${round}-gemini-review.log"
     local prompt_file="$LOOP_DIR/round-${round}-review-prompt.md"
 
-    # Create audit prompt file (codex review doesn't accept prompts, but we create this for audit)
-    local prompt_fallback="# Code Review Phase - Round ${round}
+    # Gather git diff
+    local git_diff=""
+    git_diff=$(git -C "$PROJECT_ROOT" diff "${review_base}..HEAD" 2>/dev/null) || git_diff="(git diff failed)"
 
-This file documents the code review invocation for audit purposes.
-Note: codex review does not accept prompt input; it performs automated code review based on git diff.
+    # Gather changed file contents (skip binaries and files >500 lines)
+    local changed_files=""
+    changed_files=$(git -C "$PROJECT_ROOT" diff --name-only "${review_base}..HEAD" 2>/dev/null) || changed_files=""
 
-## Review Configuration
-- Base Branch: ${BASE_BRANCH}
-- Base Commit: ${BASE_COMMIT:-N/A}
-- Review Base (${review_base_type}): ${review_base}
-- Review Round: ${round}
-- Timestamp: ${timestamp}
+    local changed_files_content=""
+    while IFS= read -r filepath; do
+        [[ -z "$filepath" ]] && continue
+        local full_path="$PROJECT_ROOT/$filepath"
+        [[ ! -f "$full_path" ]] && continue
+        local line_count
+        line_count=$(wc -l < "$full_path" 2>/dev/null | tr -d ' ') || continue
+        [[ ! "$line_count" =~ ^[0-9]+$ ]] && continue
+        [[ "$line_count" -gt 500 ]] && continue
+        # Skip likely binary files by extension
+        local ext="${filepath##*.}"
+        local ext_lower
+        ext_lower=$(to_lower "$ext")
+        case "$ext_lower" in
+            png|jpg|jpeg|gif|bmp|ico|pdf|zip|tar|gz|bz2|xz|7z|exe|dll|so|dylib|bin|wasm)
+                continue ;;
+        esac
+        changed_files_content="${changed_files_content}### ${filepath}
+\`\`\`
+$(cat "$full_path")
+\`\`\`
+
 "
-    load_and_render_safe "$TEMPLATE_DIR" "codex/code-review-phase.md" "$prompt_fallback" \
-        "REVIEW_ROUND=$round" \
-        "BASE_BRANCH=$BASE_BRANCH" \
-        "BASE_COMMIT=${BASE_COMMIT:-N/A}" \
-        "REVIEW_BASE=$review_base" \
-        "REVIEW_BASE_TYPE=$review_base_type" \
-        "TIMESTAMP=$timestamp" > "$prompt_file"
+    done <<< "$changed_files"
 
-    echo "Code review prompt (audit) saved to: $prompt_file" >&2
+    # Build the review prompt directly (not via template system to avoid escaping issues with diff content)
+    {
+        echo "# Code Review - Round ${round}"
+        echo ""
+        echo "You are an expert code reviewer. Review the following git diff and changed file contents for issues."
+        echo "Report every issue using severity markers in this exact format:"
+        echo ""
+        echo "\`\`\`"
+        echo "- [P0] Critical issue - /path/to/file.py:line-range"
+        echo "  Explanation."
+        echo ""
+        echo "- [P1] High priority issue - /path/to/file.py:line-range"
+        echo "  Explanation."
+        echo "\`\`\`"
+        echo ""
+        echo "Severity: [P0]=critical [P1]=high [P2]=medium [P3]=low [P4-P9]=informational"
+        echo ""
+        echo "## Review Configuration"
+        echo "- Base: ${review_base} (${review_base_type})"
+        echo "- Round: ${round}"
+        echo "- Timestamp: ${timestamp}"
+        echo ""
+        echo "## Git Diff"
+        echo ""
+        echo "\`\`\`diff"
+        echo "$git_diff"
+        echo "\`\`\`"
+        echo ""
+        echo "## Changed File Contents"
+        echo ""
+        echo "$changed_files_content"
+        echo ""
+        echo "## Instructions"
+        echo "1. Review the diff and changed files carefully."
+        echo "2. Report every issue with a [P0-9] severity marker."
+        echo "3. Be specific: include file path and line range for each issue."
+        echo "4. If you find no issues, output only: No issues found."
+        echo "5. Do NOT output explanatory preamble - start directly with issues or 'No issues found.'"
+    } > "$prompt_file"
+
+    echo "Gemini review prompt saved to: $prompt_file" >&2
 
     {
-        echo "# Codex review invocation debug info"
+        echo "# Gemini review invocation debug info"
         echo "# Timestamp: $timestamp"
         echo "# Working directory: $PROJECT_ROOT"
         echo "# Base branch: $BASE_BRANCH"
         echo "# Base commit: ${BASE_COMMIT:-N/A}"
         echo "# Review base ($review_base_type): $review_base"
-        echo "# Timeout: $CODEX_TIMEOUT seconds"
+        echo "# Model: $GEMINI_MODEL"
+        echo "# Timeout: $GEMINI_TIMEOUT seconds"
         echo ""
-        echo "codex review --base $review_base ${CODEX_REVIEW_ARGS[*]}"
-    } > "$CODEX_REVIEW_CMD_FILE"
+        echo "gemini --model $GEMINI_MODEL -p \"<prompt>\""
+    } > "$GEMINI_REVIEW_CMD_FILE"
 
-    echo "Codex review command saved to: $CODEX_REVIEW_CMD_FILE" >&2
-    echo "Running codex review with timeout ${CODEX_TIMEOUT}s in $PROJECT_ROOT (base: $review_base)..." >&2
+    echo "Gemini review command saved to: $GEMINI_REVIEW_CMD_FILE" >&2
+    echo "Running gemini review with timeout ${GEMINI_TIMEOUT}s (base: $review_base)..." >&2
 
-    # Run codex review from PROJECT_ROOT to ensure correct git context
-    # (hooks may execute from plugin directory, not project root)
-    # Note: codex review outputs to stderr, so we redirect both stdout and stderr to the log file
-    CODEX_REVIEW_EXIT_CODE=0
-    (cd "$PROJECT_ROOT" && run_with_timeout "$CODEX_TIMEOUT" codex review --base "$review_base" "${CODEX_REVIEW_ARGS[@]}") \
-        > "$CODEX_REVIEW_LOG_FILE" 2>&1 || CODEX_REVIEW_EXIT_CODE=$?
+    local gemini_prompt
+    gemini_prompt=$(cat "$prompt_file")
 
-    echo "Codex review exit code: $CODEX_REVIEW_EXIT_CODE" >&2
-    echo "Codex review log saved to: $CODEX_REVIEW_LOG_FILE" >&2
+    GEMINI_REVIEW_EXIT_CODE=0
+    (cd "$PROJECT_ROOT" && run_with_timeout "$GEMINI_TIMEOUT" gemini --model "$GEMINI_MODEL" -p "$gemini_prompt") \
+        > "$GEMINI_REVIEW_LOG_FILE" 2>&1 || GEMINI_REVIEW_EXIT_CODE=$?
 
-    return "$CODEX_REVIEW_EXIT_CODE"
+    echo "Gemini review exit code: $GEMINI_REVIEW_EXIT_CODE" >&2
+    echo "Gemini review log saved to: $GEMINI_REVIEW_LOG_FILE" >&2
+
+    return "$GEMINI_REVIEW_EXIT_CODE"
 }
 
 # Note: detect_review_issues() is defined in loop-common.sh and sourced above
 
 # Run code review and handle the result
 # Arguments: $1=round_number, $2=success_system_message
-# This function consolidates the common pattern of:
-#   1. Running codex review (no prompt - uses --base only)
-#   2. Checking results and handling outcomes
 # On success (no issues), calls enter_finalize_phase and exits
 # On issues found, calls continue_review_loop_with_issues and exits
 # On failure, calls block_review_failure and exits
-#
-# Round numbering: After COMPLETE at round N, all review phase files use round N+1
-# The caller passes CURRENT_ROUND + 1 as the round_number parameter
 run_and_handle_code_review() {
     local round="$1"
     local success_msg="$2"
 
-    echo "Running codex review against base branch: $BASE_BRANCH..." >&2
+    echo "Running gemini review against base: ${BASE_COMMIT:-$BASE_BRANCH}..." >&2
 
-    # Run codex review using helper function
-    # IMPORTANT: Review failure is a blocking error - do NOT skip to finalize
-    if ! run_codex_code_review "$round"; then
-        block_review_failure "$round" "Codex review command failed" "$CODEX_REVIEW_EXIT_CODE"
+    # Run gemini review; IMPORTANT: failure is blocking - do NOT skip to finalize
+    if ! run_gemini_code_review "$round"; then
+        block_review_failure "$round" "Gemini review command failed" "$GEMINI_REVIEW_EXIT_CODE"
     fi
 
-    # Check both stdout and result file for [P0-9] issues (plan requirement)
-    # detect_review_issues returns: 0=issues found, 1=no issues, 2=stdout missing (hard error)
+    # detect_review_issues returns: 0=issues found, 1=no issues, 2=log missing (hard error)
     local merged_content=""
     local detect_exit=0
     merged_content=$(detect_review_issues "$round") || detect_exit=$?
 
     if [[ "$detect_exit" -eq 2 ]]; then
-        # Stdout missing/empty is a hard error - block and require retry
-        block_review_failure "$round" "Codex review produced no stdout output" "N/A"
+        block_review_failure "$round" "Gemini review produced no output" "N/A"
     elif [[ "$detect_exit" -eq 0 ]] && [[ -n "$merged_content" ]]; then
         # Issues found - continue review loop
         continue_review_loop_with_issues "$round" "$merged_content"
@@ -1210,7 +1220,7 @@ You are in the **Review Phase** of the RLCR loop. Codex has performed a code rev
     exit 0
 }
 
-# Block exit when codex review fails or produces no output
+# Block exit when gemini review fails or produces no output
 # This is a hard error - the review phase cannot be skipped
 # Arguments: $1=round_number, $2=failure_reason, $3=exit_code (optional)
 block_review_failure() {
@@ -1218,15 +1228,15 @@ block_review_failure() {
     local failure_reason="$2"
     local exit_code="${3:-unknown}"
 
-    echo "ERROR: Codex review failed. Blocking exit and requiring retry." >&2
+    echo "ERROR: Gemini review failed. Blocking exit and requiring retry." >&2
 
     local stderr_content=""
-    local stderr_file="$CACHE_DIR/round-${round}-codex-review.log"
+    local stderr_file="$CACHE_DIR/round-${round}-gemini-review.log"
     if [[ -f "$stderr_file" ]]; then
         stderr_content=$(tail -50 "$stderr_file" 2>/dev/null || echo "(unable to read stderr)")
     fi
 
-    local fallback="# Codex Review Failed
+    local fallback="# Gemini Review Failed
 
 The code review could not be completed. This is a blocking error that requires retry.
 
@@ -1239,11 +1249,11 @@ The code review could not be completed. This is a blocking error that requires r
 
 ## What Happened
 
-The \`codex review\` command failed to produce valid output. This can occur due to:
+The Gemini review command failed to produce valid output. This can occur due to:
 - Network connectivity issues
-- Codex service timeout or unavailability
+- Gemini service timeout or unavailability
 - Invalid review configuration
-- Internal Codex errors
+- Internal Gemini errors
 
 ## Required Action
 
@@ -1271,12 +1281,11 @@ Stderr (last 50 lines):
         "EXIT_CODE=$exit_code" \
         "STDERR_CONTENT=$stderr_content" \
         "REVIEW_RESULT_FILE=$LOOP_DIR/round-${round}-review-result.md" \
-        "CODEX_CMD_FILE=$CACHE_DIR/round-${round}-codex-review.cmd" \
-        "CODEX_LOG_FILE=$CACHE_DIR/round-${round}-codex-review.log")
+        "REVIEW_LOG_FILE=$CACHE_DIR/round-${round}-gemini-review.log")
 
     jq -n \
         --arg reason "$reason" \
-        --arg msg "Loop: Blocked - Codex review failed, retry required" \
+        --arg msg "Loop: Blocked - Gemini review failed, retry required" \
         '{
             "decision": "block",
             "reason": $reason,
@@ -1286,66 +1295,66 @@ Stderr (last 50 lines):
 }
 
 # ========================================
-# Run Codex Review (Implementation Phase Only)
+# Run Gemini Review (Implementation Phase Only)
 # ========================================
-# Skip the summary review when in review phase - review phase uses codex review instead
+# Skip when in review phase - review phase uses gemini code review instead
 
 if [[ "$REVIEW_STARTED" == "true" ]]; then
-    echo "In review phase - skipping codex exec summary review, will run codex review instead..." >&2
+    echo "In review phase - skipping gemini summary review, will run gemini code review instead..." >&2
     # Jump directly to Review Phase section below (after the COMPLETE/STOP handling)
 else
 
-echo "Running Codex review for round $CURRENT_ROUND..." >&2
+echo "Running Gemini review for round $CURRENT_ROUND..." >&2
 
-CODEX_CMD_FILE="$CACHE_DIR/round-${CURRENT_ROUND}-codex-run.cmd"
-CODEX_STDOUT_FILE="$CACHE_DIR/round-${CURRENT_ROUND}-codex-run.out"
-CODEX_STDERR_FILE="$CACHE_DIR/round-${CURRENT_ROUND}-codex-run.log"
+GEMINI_CMD_FILE="$CACHE_DIR/round-${CURRENT_ROUND}-gemini-run.cmd"
+GEMINI_STDOUT_FILE="$CACHE_DIR/round-${CURRENT_ROUND}-gemini-run.out"
+GEMINI_STDERR_FILE="$CACHE_DIR/round-${CURRENT_ROUND}-gemini-run.log"
 
-# Save the command for debugging
-CODEX_PROMPT_CONTENT=$(cat "$REVIEW_PROMPT_FILE")
+# Save the command and prompt for debugging
+GEMINI_PROMPT_CONTENT=$(cat "$REVIEW_PROMPT_FILE")
 {
-    echo "# Codex invocation debug info"
+    echo "# Gemini invocation debug info"
     echo "# Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "# Working directory: $PROJECT_ROOT"
-    echo "# Timeout: $CODEX_TIMEOUT seconds"
+    echo "# Model: $GEMINI_MODEL"
+    echo "# Timeout: $GEMINI_TIMEOUT seconds"
     echo ""
-    echo "codex exec ${CODEX_EXEC_ARGS[*]} \"<prompt>\""
+    echo "gemini --model $GEMINI_MODEL -p \"<prompt>\""
     echo ""
     echo "# Prompt content:"
-    echo "$CODEX_PROMPT_CONTENT"
-} > "$CODEX_CMD_FILE"
+    echo "$GEMINI_PROMPT_CONTENT"
+} > "$GEMINI_CMD_FILE"
 
-echo "Codex command saved to: $CODEX_CMD_FILE" >&2
-echo "Running codex exec with timeout ${CODEX_TIMEOUT}s..." >&2
+echo "Gemini command saved to: $GEMINI_CMD_FILE" >&2
+echo "Running gemini with timeout ${GEMINI_TIMEOUT}s..." >&2
 
-CODEX_EXIT_CODE=0
-printf '%s' "$CODEX_PROMPT_CONTENT" | run_with_timeout "$CODEX_TIMEOUT" codex exec "${CODEX_EXEC_ARGS[@]}" - \
-    > "$CODEX_STDOUT_FILE" 2> "$CODEX_STDERR_FILE" || CODEX_EXIT_CODE=$?
+GEMINI_EXIT_CODE=0
+run_with_timeout "$GEMINI_TIMEOUT" gemini --model "$GEMINI_MODEL" -p "$GEMINI_PROMPT_CONTENT" \
+    > "$GEMINI_STDOUT_FILE" 2> "$GEMINI_STDERR_FILE" || GEMINI_EXIT_CODE=$?
 
-echo "Codex exit code: $CODEX_EXIT_CODE" >&2
-echo "Codex stdout saved to: $CODEX_STDOUT_FILE" >&2
-echo "Codex stderr saved to: $CODEX_STDERR_FILE" >&2
+echo "Gemini exit code: $GEMINI_EXIT_CODE" >&2
+echo "Gemini stdout saved to: $GEMINI_STDOUT_FILE" >&2
+echo "Gemini stderr saved to: $GEMINI_STDERR_FILE" >&2
 
 # ========================================
-# Check Codex Execution Result
+# Check Gemini Execution Result
 # ========================================
 
-# Helper function to print Codex failure and block exit for retry
-# Uses JSON output with exit 0 (per Claude Code hooks spec) instead of exit 2
-codex_failure_exit() {
+# Helper function to print Gemini failure and block exit for retry
+gemini_failure_exit() {
     local error_type="$1"
     local details="$2"
 
-    REASON="# Codex Review Failed
+    REASON="# Gemini Review Failed
 
 **Error Type:** $error_type
 
 $details
 
 **Debug files:**
-- Command: $CODEX_CMD_FILE
-- Stdout: $CODEX_STDOUT_FILE
-- Stderr: $CODEX_STDERR_FILE
+- Command: $GEMINI_CMD_FILE
+- Stdout: $GEMINI_STDOUT_FILE
+- Stderr: $GEMINI_STDERR_FILE
 
 Please retry or use \`/cancel-rlcr-loop\` to end the loop."
 
@@ -1358,78 +1367,48 @@ EOF
     exit 0
 }
 
-# Check 1: Codex exit code indicates failure
-if [[ "$CODEX_EXIT_CODE" -ne 0 ]]; then
+# Check 1: Gemini exit code indicates failure
+if [[ "$GEMINI_EXIT_CODE" -ne 0 ]]; then
     STDERR_CONTENT=""
-    if [[ -f "$CODEX_STDERR_FILE" ]]; then
-        STDERR_CONTENT=$(tail -30 "$CODEX_STDERR_FILE" 2>/dev/null || echo "(unable to read stderr)")
+    if [[ -f "$GEMINI_STDERR_FILE" ]]; then
+        STDERR_CONTENT=$(tail -30 "$GEMINI_STDERR_FILE" 2>/dev/null || echo "(unable to read stderr)")
     fi
 
-    codex_failure_exit "Non-zero exit code ($CODEX_EXIT_CODE)" \
-"Codex exited with code $CODEX_EXIT_CODE.
+    gemini_failure_exit "Non-zero exit code ($GEMINI_EXIT_CODE)" \
+"Gemini exited with code $GEMINI_EXIT_CODE.
 This may indicate:
   - Invalid arguments or configuration
   - Authentication failure
   - Network issues
-  - Prompt format issues (e.g., multiline handling)
+  - Prompt format issues
 
 Stderr output (last 30 lines):
 $STDERR_CONTENT"
 fi
 
-# Check if Codex created the review result file (it should write to workspace)
-# If not, check if it wrote to stdout
-if [[ ! -f "$REVIEW_RESULT_FILE" ]]; then
-    # Codex might have written output to stdout instead
-    if [[ -s "$CODEX_STDOUT_FILE" ]]; then
-        echo "Codex output found in stdout, copying to review result file..." >&2
-        if ! cp "$CODEX_STDOUT_FILE" "$REVIEW_RESULT_FILE" 2>/dev/null; then
-            codex_failure_exit "Failed to copy stdout to review result file" \
-"Codex wrote output to stdout but copying to review file failed.
-Source: $CODEX_STDOUT_FILE
-Target: $REVIEW_RESULT_FILE
+# Gemini writes to stdout; copy to review result file
+if [[ -s "$GEMINI_STDOUT_FILE" ]]; then
+    if ! cp "$GEMINI_STDOUT_FILE" "$REVIEW_RESULT_FILE" 2>/dev/null; then
+        gemini_failure_exit "Failed to save review output" \
+"Could not copy Gemini output to: $REVIEW_RESULT_FILE
+Source: $GEMINI_STDOUT_FILE
 
-This may indicate permission issues or disk space problems.
-Check if the loop directory is writable."
-        fi
+This may indicate permission issues or disk space problems."
     fi
 fi
 
-# Check 2: Review result file still doesn't exist
-if [[ ! -f "$REVIEW_RESULT_FILE" ]]; then
-    STDERR_CONTENT=""
-    if [[ -f "$CODEX_STDERR_FILE" ]]; then
-        STDERR_CONTENT=$(tail -30 "$CODEX_STDERR_FILE" 2>/dev/null || echo "(no stderr output)")
+# Check 2: Review result file still doesn't exist or is empty
+if [[ ! -f "$REVIEW_RESULT_FILE" ]] || [[ ! -s "$REVIEW_RESULT_FILE" ]]; then
+    STDOUT_PREVIEW=""
+    if [[ -f "$GEMINI_STDOUT_FILE" ]]; then
+        STDOUT_PREVIEW=$(tail -10 "$GEMINI_STDOUT_FILE" 2>/dev/null || echo "(no output)")
     fi
+    gemini_failure_exit "Review result file missing or empty" \
+"Expected: $REVIEW_RESULT_FILE
+Gemini completed (exit code 0) but produced no output.
 
-    STDOUT_CONTENT=""
-    if [[ -f "$CODEX_STDOUT_FILE" ]]; then
-        STDOUT_CONTENT=$(tail -30 "$CODEX_STDOUT_FILE" 2>/dev/null || echo "(no stdout output)")
-    fi
-
-    codex_failure_exit "Review result file not created" \
-"Expected file: $REVIEW_RESULT_FILE
-Codex completed (exit code 0) but did not create the review result file.
-
-This may indicate:
-  - Codex did not understand the prompt
-  - Codex wrote to wrong path
-  - Workspace/permission issues
-
-Stdout (last 30 lines):
-$STDOUT_CONTENT
-
-Stderr (last 30 lines):
-$STDERR_CONTENT"
-fi
-
-# Check 3: Review result file is empty
-if [[ ! -s "$REVIEW_RESULT_FILE" ]]; then
-    codex_failure_exit "Review result file is empty" \
-"File exists but is empty: $REVIEW_RESULT_FILE
-Codex created the file but wrote no content.
-
-This may indicate Codex encountered an internal error."
+Stdout preview:
+$STDOUT_PREVIEW"
 fi
 
 # Read the review result
@@ -1445,13 +1424,13 @@ LAST_LINE_TRIMMED=$(echo "$LAST_LINE" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//
 if [[ "$LAST_LINE_TRIMMED" == "$MARKER_COMPLETE" ]]; then
     # In review phase, COMPLETE signal is ignored - only absence of [P0-9] triggers finalize
     if [[ "$REVIEW_STARTED" == "true" ]]; then
-        echo "COMPLETE signal ignored in review phase. Codex review determines exit." >&2
-        # Fall through to continue with codex review logic below
+        echo "COMPLETE signal ignored in review phase. Gemini code review determines exit." >&2
+        # Fall through to continue with gemini code review logic below
     else
         # Implementation phase complete - transition to review phase
         # Max iterations check
         if [[ $CURRENT_ROUND -ge $MAX_ITERATIONS ]]; then
-            echo "Codex review passed but at max iterations ($MAX_ITERATIONS). Terminating as MAXITER." >&2
+            echo "Gemini review passed but at max iterations ($MAX_ITERATIONS). Terminating as MAXITER." >&2
             end_loop "$LOOP_DIR" "$STATE_FILE" "$EXIT_MAXITER"
             exit 0
         fi
@@ -1486,12 +1465,12 @@ if [[ "$LAST_LINE_TRIMMED" == "$MARKER_COMPLETE" ]]; then
     fi
 fi
 
-fi  # End of implementation phase codex exec block (skipped when review_started is true)
+fi  # End of implementation phase gemini review block (skipped when review_started is true)
 
 # ========================================
 # Review Phase: Run Code Review (when review_started is true)
 # ========================================
-# When in review phase, we need to run codex review on every exit attempt
+# When in review phase, run gemini code review on every exit attempt
 # The loop continues until no [P0-9] patterns are found in the review output
 
 if [[ "$REVIEW_STARTED" == "true" && -n "$BASE_BRANCH" ]]; then
@@ -1512,7 +1491,7 @@ Use \`/humanize:cancel-rlcr-loop\` to end this loop."
         exit 0
     fi
 
-    echo "Review Phase: Running code review..." >&2
+    echo "Review Phase: Running gemini code review..." >&2
 
     # Run code review and handle results (may exit on issues/failure/success)
     # Pass CURRENT_ROUND + 1 so all review phase files use the next round number
@@ -1526,7 +1505,7 @@ if [[ "$LAST_LINE_TRIMMED" == "$MARKER_STOP" ]]; then
     if [[ "$FULL_ALIGNMENT_CHECK" == "true" ]]; then
         echo "CIRCUIT BREAKER TRIGGERED" >&2
         echo "========================================" >&2
-        echo "Codex detected development stagnation during Full Alignment Check (Round $CURRENT_ROUND)." >&2
+        echo "Gemini detected development stagnation during Full Alignment Check (Round $CURRENT_ROUND)." >&2
         echo "The loop has been stopped to prevent further unproductive iterations." >&2
         echo "" >&2
         echo "Review the historical round files in .humanize/rlcr/$(basename "$LOOP_DIR")/ to understand what went wrong." >&2
@@ -1537,7 +1516,7 @@ if [[ "$LAST_LINE_TRIMMED" == "$MARKER_STOP" ]]; then
     else
         echo "UNEXPECTED CIRCUIT BREAKER" >&2
         echo "========================================" >&2
-        echo "Codex output STOP during a non-alignment round (Round $CURRENT_ROUND)." >&2
+        echo "Gemini output STOP during a non-alignment round (Round $CURRENT_ROUND)." >&2
         echo "This is unusual - STOP is normally only expected during Full Alignment Checks (every $FULL_REVIEW_ROUND rounds)." >&2
         echo "Honoring the STOP request and terminating the loop." >&2
         echo "" >&2
@@ -1567,7 +1546,7 @@ NEXT_ROUND_FALLBACK="# Next Round Instructions
 
 Review the feedback below and address all issues.
 
-## Codex Review
+## Gemini Review
 {{REVIEW_CONTENT}}
 
 Reference: {{PLAN_FILE}}, {{GOAL_TRACKER_FILE}}"
@@ -1578,7 +1557,7 @@ load_and_render_safe "$TEMPLATE_DIR" "claude/next-round-prompt.md" "$NEXT_ROUND_
 
 # Check for Open Questions in review content and inject notice if enabled
 # Detection: line containing "Open Question" substring with total length < 40 chars
-if [[ "$ASK_CODEX_QUESTION" == "true" ]]; then
+if [[ "$ASK_GEMINI_QUESTION" == "true" ]]; then
     HAS_OPEN_QUESTION=false
     while IFS= read -r line; do
         if [[ ${#line} -lt 40 ]] && echo "$line" | grep -q "Open Question"; then
@@ -1588,10 +1567,10 @@ if [[ "$ASK_CODEX_QUESTION" == "true" ]]; then
     done < "$REVIEW_RESULT_FILE"
 
     if [[ "$HAS_OPEN_QUESTION" == "true" ]]; then
-        echo "Detected Open Question(s) in Codex review - injecting AskUserQuestion notice" >&2
+        echo "Detected Open Question(s) in Gemini review - injecting AskUserQuestion notice" >&2
         OPEN_QUESTION_NOTICE=$(load_template "$TEMPLATE_DIR" "claude/open-question-notice.md" 2>/dev/null)
         if [[ -z "$OPEN_QUESTION_NOTICE" ]]; then
-            OPEN_QUESTION_NOTICE="**IMPORTANT**: Codex has found Open Question(s). You must use \`AskUserQuestion\` to clarify those questions with user first, before proceeding to resolve any other Codex's findings."
+            OPEN_QUESTION_NOTICE="**IMPORTANT**: Gemini has found Open Question(s). You must use \`AskUserQuestion\` to clarify those questions with user first, before proceeding to resolve any other Gemini findings."
         fi
         # Insert notice between "<!-- CODEX's REVIEW RESULT  END  -->" line + "---" line and "## Goal Tracker Reference"
         TEMP_PROMPT_FILE="${NEXT_PROMPT_FILE}.tmp.$$"

@@ -14,10 +14,9 @@ set -euo pipefail
 # Default Configuration
 # ========================================
 
-# Override defaults before sourcing loop-common.sh (PR loop uses different model/effort than RLCR)
-DEFAULT_CODEX_MODEL="gpt-5.4"
-DEFAULT_CODEX_EFFORT="medium"
-DEFAULT_CODEX_TIMEOUT=900
+# Override defaults before sourcing loop-common.sh (PR loop uses different model than RLCR)
+DEFAULT_GEMINI_MODEL="gemini-3.1-pro-preview"
+DEFAULT_GEMINI_TIMEOUT=900
 DEFAULT_MAX_ITERATIONS=42
 
 # Polling configuration
@@ -34,7 +33,7 @@ GH_TIMEOUT=60
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/portable-timeout.sh"
 
-# Source template loader and shared loop library (provides DEFAULT_CODEX_MODEL and other constants)
+# Source template loader and shared loop library (provides DEFAULT_GEMINI_MODEL and other constants)
 HOOKS_LIB_DIR="$(cd "$SCRIPT_DIR/../hooks/lib" && pwd)"
 source "$HOOKS_LIB_DIR/template-loader.sh"
 source "$HOOKS_LIB_DIR/loop-common.sh"
@@ -47,9 +46,8 @@ TEMPLATE_DIR="${TEMPLATE_DIR:-$(get_template_dir "$HOOKS_LIB_DIR")}"
 # ========================================
 
 MAX_ITERATIONS="$DEFAULT_MAX_ITERATIONS"
-CODEX_MODEL="$DEFAULT_CODEX_MODEL"
-CODEX_EFFORT="$DEFAULT_CODEX_EFFORT"
-CODEX_TIMEOUT="$DEFAULT_CODEX_TIMEOUT"
+GEMINI_MODEL="$DEFAULT_GEMINI_MODEL"
+GEMINI_TIMEOUT="$DEFAULT_GEMINI_TIMEOUT"
 
 # Bot flags
 BOT_CLAUDE="false"
@@ -68,10 +66,10 @@ BOT FLAGS (at least one required):
 
 OPTIONS:
   --max <N>            Maximum iterations before auto-stop (default: 42)
-  --codex-model <MODEL:EFFORT>
-                       Codex model and reasoning effort (default: gpt-5.4:medium)
-  --codex-timeout <SECONDS>
-                       Timeout for each Codex review in seconds (default: 900)
+  --gemini-model <MODEL>
+                       Gemini model for review (default: gemini-3.1-pro-preview)
+  --gemini-timeout <SECONDS>
+                       Timeout for each Gemini review in seconds (default: 900)
   -h, --help           Show this help message
 
 DESCRIPTION:
@@ -82,7 +80,7 @@ DESCRIPTION:
   3. Analyzes and fixes issues identified by the bot(s)
   4. Pushes changes and triggers re-review by commenting @bot
   5. Waits for bot response (polls every 30s, 15min timeout)
-  6. Uses local Codex to verify if remote concerns are valid
+  6. Uses local Gemini to verify if remote concerns are valid
 
   The flow:
   1. Claude analyzes PR comments and fixes issues
@@ -133,31 +131,24 @@ while [[ $# -gt 0 ]]; do
             MAX_ITERATIONS="$2"
             shift 2
             ;;
-        --codex-model)
+        --gemini-model)
             if [[ -z "${2:-}" ]]; then
-                echo "Error: --codex-model requires a MODEL:EFFORT argument" >&2
+                echo "Error: --gemini-model requires a MODEL argument" >&2
                 exit 1
             fi
-            # Parse MODEL:EFFORT format (portable - works in bash and zsh)
-            if [[ "$2" == *:* ]]; then
-                CODEX_MODEL="${2%%:*}"
-                CODEX_EFFORT="${2#*:}"
-            else
-                CODEX_MODEL="$2"
-                CODEX_EFFORT="$DEFAULT_CODEX_EFFORT"
-            fi
+            GEMINI_MODEL="$2"
             shift 2
             ;;
-        --codex-timeout)
+        --gemini-timeout)
             if [[ -z "${2:-}" ]]; then
-                echo "Error: --codex-timeout requires a number argument (seconds)" >&2
+                echo "Error: --gemini-timeout requires a number argument (seconds)" >&2
                 exit 1
             fi
             if ! [[ "$2" =~ ^[0-9]+$ ]]; then
-                echo "Error: --codex-timeout must be a positive integer (seconds), got: $2" >&2
+                echo "Error: --gemini-timeout must be a positive integer (seconds), got: $2" >&2
                 exit 1
             fi
-            CODEX_TIMEOUT="$2"
+            GEMINI_TIMEOUT="$2"
             shift 2
             ;;
         -*)
@@ -268,11 +259,11 @@ if ! gh auth status &>/dev/null 2>&1; then
     exit 1
 fi
 
-# Check codex is available
-if ! command -v codex &>/dev/null; then
-    echo "Error: start-pr-loop requires codex to run" >&2
+# Check gemini is available
+if ! command -v gemini &>/dev/null; then
+    echo "Error: start-pr-loop requires gemini to run" >&2
     echo "" >&2
-    echo "Please install Codex CLI: https://openai.com/codex" >&2
+    echo "Please install Gemini CLI: https://github.com/google-gemini/gemini-cli" >&2
     exit 1
 fi
 
@@ -390,19 +381,11 @@ if [[ "$START_BRANCH" == *[:\#\"\'\`]* ]] || [[ "$START_BRANCH" =~ $'\n' ]]; the
     exit 1
 fi
 
-# Validate codex model for YAML safety
-if [[ ! "$CODEX_MODEL" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-    echo "Error: Codex model contains invalid characters" >&2
-    echo "  Model: $CODEX_MODEL" >&2
+# Validate gemini model for YAML safety
+if [[ ! "$GEMINI_MODEL" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    echo "Error: Gemini model contains invalid characters" >&2
+    echo "  Model: $GEMINI_MODEL" >&2
     echo "  Only alphanumeric, hyphen, underscore, dot allowed" >&2
-    exit 1
-fi
-
-# Validate codex effort for YAML safety
-if [[ ! "$CODEX_EFFORT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    echo "Error: Codex effort contains invalid characters" >&2
-    echo "  Effort: $CODEX_EFFORT" >&2
-    echo "  Only alphanumeric, hyphen, underscore allowed" >&2
     exit 1
 fi
 
@@ -620,9 +603,8 @@ pr_number: $PR_NUMBER
 start_branch: $START_BRANCH
 configured_bots:${CONFIGURED_BOTS_YAML}
 active_bots:${ACTIVE_BOTS_YAML}
-codex_model: $CODEX_MODEL
-codex_effort: $CODEX_EFFORT
-codex_timeout: $CODEX_TIMEOUT
+gemini_model: $GEMINI_MODEL
+gemini_timeout: $GEMINI_TIMEOUT
 poll_interval: $POLL_INTERVAL
 poll_timeout: $POLL_TIMEOUT
 started_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -865,16 +847,15 @@ Branch: $START_BRANCH
 Active Bots: $ACTIVE_BOTS_DISPLAY
 Comments Fetched: $COMMENT_COUNT
 Max Iterations: $MAX_ITERATIONS
-Codex Model: $CODEX_MODEL
-Codex Effort: $CODEX_EFFORT
-Codex Timeout: ${CODEX_TIMEOUT}s
+Gemini Model: $GEMINI_MODEL
+Gemini Timeout: ${GEMINI_TIMEOUT}s
 Poll Interval: ${POLL_INTERVAL}s
 Poll Timeout: ${POLL_TIMEOUT}s (per bot)
 Loop Directory: $LOOP_DIR
 
 The PR loop is now active. When you try to exit:
 1. Stop Hook polls for new bot reviews (every 30s)
-2. When reviews arrive, local Codex validates them
+2. When reviews arrive, local Gemini validates them
 3. If issues remain, you'll receive feedback and continue
 4. If all bots approve, the loop ends
 

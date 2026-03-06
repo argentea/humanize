@@ -213,7 +213,7 @@ validate_template_dir() {
         return 1
     fi
 
-    if [[ ! -d "$template_dir/block" ]] || [[ ! -d "$template_dir/codex" ]] || [[ ! -d "$template_dir/claude" ]]; then
+    if [[ ! -d "$template_dir/block" ]] || [[ ! -d "$template_dir/codex" ]] || [[ ! -d "$template_dir/claude" ]] || [[ ! -d "$template_dir/gemini" ]]; then
         echo "ERROR: Template directory missing subdirectories: $template_dir" >&2
         return 1
     fi

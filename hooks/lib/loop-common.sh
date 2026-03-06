@@ -30,21 +30,19 @@ readonly FIELD_PLAN_FILE="plan_file"
 readonly FIELD_CURRENT_ROUND="current_round"
 readonly FIELD_MAX_ITERATIONS="max_iterations"
 readonly FIELD_PUSH_EVERY_ROUND="push_every_round"
-readonly FIELD_CODEX_MODEL="codex_model"
-readonly FIELD_CODEX_EFFORT="codex_effort"
-readonly FIELD_CODEX_TIMEOUT="codex_timeout"
+readonly FIELD_GEMINI_MODEL="gemini_model"
+readonly FIELD_GEMINI_TIMEOUT="gemini_timeout"
 readonly FIELD_REVIEW_STARTED="review_started"
 readonly FIELD_FULL_REVIEW_ROUND="full_review_round"
-readonly FIELD_ASK_CODEX_QUESTION="ask_codex_question"
+readonly FIELD_ASK_GEMINI_QUESTION="ask_gemini_question"
 readonly FIELD_SESSION_ID="session_id"
 readonly FIELD_AGENT_TEAMS="agent_teams"
 
-# Default Codex configuration (single source of truth - all scripts reference this)
-# Both use :- so scripts can override before sourcing (e.g. PR loop sets different model/effort).
+# Default Gemini configuration (single source of truth - all scripts reference this)
+# Uses :- so scripts can override before sourcing (e.g. PR loop sets different model).
 #
-# Default model for Codex operations (same model for both plugin and skill mode)
-DEFAULT_CODEX_MODEL="${DEFAULT_CODEX_MODEL:-gpt-5.4}"
-DEFAULT_CODEX_EFFORT="${DEFAULT_CODEX_EFFORT:-xhigh}"
+# Default model for Gemini operations (same model for both plugin and skill mode)
+DEFAULT_GEMINI_MODEL="${DEFAULT_GEMINI_MODEL:-gemini-3.1-pro-preview}"
 
 # Codex review markers
 readonly MARKER_COMPLETE="COMPLETE"
@@ -322,12 +320,11 @@ _parse_state_fields() {
     STATE_CURRENT_ROUND=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CURRENT_ROUND}:" | sed "s/${FIELD_CURRENT_ROUND}: *//" | tr -d ' ' || true)
     STATE_MAX_ITERATIONS=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_MAX_ITERATIONS}:" | sed "s/${FIELD_MAX_ITERATIONS}: *//" | tr -d ' ' || true)
     STATE_PUSH_EVERY_ROUND=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_PUSH_EVERY_ROUND}:" | sed "s/${FIELD_PUSH_EVERY_ROUND}: *//" | tr -d ' ' || true)
-    STATE_CODEX_MODEL=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CODEX_MODEL}:" | sed "s/${FIELD_CODEX_MODEL}: *//" | tr -d ' ' || true)
-    STATE_CODEX_EFFORT=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CODEX_EFFORT}:" | sed "s/${FIELD_CODEX_EFFORT}: *//" | tr -d ' ' || true)
-    STATE_CODEX_TIMEOUT=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_CODEX_TIMEOUT}:" | sed "s/${FIELD_CODEX_TIMEOUT}: *//" | tr -d ' ' || true)
+    STATE_GEMINI_MODEL=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_GEMINI_MODEL}:" | sed "s/${FIELD_GEMINI_MODEL}: *//" | tr -d ' ' || true)
+    STATE_GEMINI_TIMEOUT=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_GEMINI_TIMEOUT}:" | sed "s/${FIELD_GEMINI_TIMEOUT}: *//" | tr -d ' ' || true)
     STATE_REVIEW_STARTED=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_REVIEW_STARTED}:" | sed "s/${FIELD_REVIEW_STARTED}: *//" | tr -d ' ' || true)
     STATE_FULL_REVIEW_ROUND=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_FULL_REVIEW_ROUND}:" | sed "s/${FIELD_FULL_REVIEW_ROUND}: *//" | tr -d ' ' || true)
-    STATE_ASK_CODEX_QUESTION=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_ASK_CODEX_QUESTION}:" | sed "s/${FIELD_ASK_CODEX_QUESTION}: *//" | tr -d ' ' || true)
+    STATE_ASK_GEMINI_QUESTION=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_ASK_GEMINI_QUESTION}:" | sed "s/${FIELD_ASK_GEMINI_QUESTION}: *//" | tr -d ' ' || true)
     STATE_SESSION_ID=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_SESSION_ID}:" | sed "s/${FIELD_SESSION_ID}: *//" || true)
     STATE_AGENT_TEAMS=$(echo "$STATE_FRONTMATTER" | grep "^${FIELD_AGENT_TEAMS}:" | sed "s/${FIELD_AGENT_TEAMS}: *//" | tr -d ' ' || true)
 }
@@ -343,12 +340,11 @@ _parse_state_fields() {
 #   STATE_CURRENT_ROUND - current round number
 #   STATE_MAX_ITERATIONS - max iterations
 #   STATE_PUSH_EVERY_ROUND - "true" or "false"
-#   STATE_CODEX_MODEL - codex model name
-#   STATE_CODEX_EFFORT - codex effort level
-#   STATE_CODEX_TIMEOUT - codex timeout in seconds
+#   STATE_GEMINI_MODEL - gemini model name
+#   STATE_GEMINI_TIMEOUT - gemini timeout in seconds
 #   STATE_REVIEW_STARTED - "true" or "false"
 #   STATE_FULL_REVIEW_ROUND - interval for Full Alignment Check (default: 5)
-#   STATE_ASK_CODEX_QUESTION - "true" or "false" (v1.6.5+)
+#   STATE_ASK_GEMINI_QUESTION - "true" or "false" (v1.6.5+)
 # Returns: 0 on success, 1 if file not found
 # Note: For strict validation, use parse_state_file_strict() instead
 parse_state_file() {
@@ -369,7 +365,7 @@ parse_state_file() {
     STATE_MAX_ITERATIONS="${STATE_MAX_ITERATIONS:-10}"
     STATE_PUSH_EVERY_ROUND="${STATE_PUSH_EVERY_ROUND:-false}"
     STATE_FULL_REVIEW_ROUND="${STATE_FULL_REVIEW_ROUND:-5}"
-    STATE_ASK_CODEX_QUESTION="${STATE_ASK_CODEX_QUESTION:-true}"
+    STATE_ASK_GEMINI_QUESTION="${STATE_ASK_GEMINI_QUESTION:-true}"
     STATE_AGENT_TEAMS="${STATE_AGENT_TEAMS:-false}"
     # STATE_REVIEW_STARTED left as-is (empty if missing, to allow schema validation)
 
@@ -444,13 +440,13 @@ parse_state_file_strict() {
     # Apply defaults for optional fields only
     STATE_PUSH_EVERY_ROUND="${STATE_PUSH_EVERY_ROUND:-false}"
     STATE_FULL_REVIEW_ROUND="${STATE_FULL_REVIEW_ROUND:-5}"
-    STATE_ASK_CODEX_QUESTION="${STATE_ASK_CODEX_QUESTION:-true}"
+    STATE_ASK_GEMINI_QUESTION="${STATE_ASK_GEMINI_QUESTION:-true}"
     STATE_AGENT_TEAMS="${STATE_AGENT_TEAMS:-false}"
 
     return 0
 }
 
-# Detect review issues from codex review log file
+# Detect review issues from gemini review log file
 # Returns:
 #   0 - issues found (caller should continue review loop)
 #   1 - no issues found (caller can proceed to finalize)
@@ -469,16 +465,15 @@ parse_state_file_strict() {
 # 3. If found: extract from that line to the end and output it.
 # 4. If not found: no issues, return 1.
 #
-# Note: codex review outputs to stderr, so we analyze the combined log file
-# which contains both stdout and stderr (redirected with 2>&1).
+# Note: gemini outputs to stdout; the log file contains stdout+stderr (redirected with 2>&1).
 detect_review_issues() {
     local round="$1"
-    local log_file="$CACHE_DIR/round-${round}-codex-review.log"
+    local log_file="$CACHE_DIR/round-${round}-gemini-review.log"
     local result_file="$LOOP_DIR/round-${round}-review-result.md"
 
     # Check if log file exists and is not empty
     if [[ ! -f "$log_file" || ! -s "$log_file" ]]; then
-        echo "Error: Codex review log file not found or empty: $log_file" >&2
+        echo "Error: Gemini review log file not found or empty: $log_file" >&2
         return 2
     fi
 

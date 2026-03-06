@@ -2,10 +2,10 @@
 #
 # Setup script for start-rlcr-loop
 #
-# Creates state files for the loop that uses Codex to review Claude's work.
+# Creates state files for the loop that uses Gemini to review Claude's work.
 #
 # Usage:
-#   setup-rlcr-loop.sh <path/to/plan.md> [--max N] [--codex-model MODEL:EFFORT]
+#   setup-rlcr-loop.sh <path/to/plan.md> [--max N] [--gemini-model MODEL]
 #
 
 set -euo pipefail
@@ -14,8 +14,8 @@ set -euo pipefail
 # Default Configuration
 # ========================================
 
-# DEFAULT_CODEX_MODEL and DEFAULT_CODEX_EFFORT are provided by loop-common.sh
-DEFAULT_CODEX_TIMEOUT=5400
+# DEFAULT_GEMINI_MODEL is provided by loop-common.sh
+DEFAULT_GEMINI_TIMEOUT=5400
 DEFAULT_MAX_ITERATIONS=42
 DEFAULT_FULL_REVIEW_ROUND=5
 
@@ -26,9 +26,8 @@ GIT_TIMEOUT=30
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 source "$SCRIPT_DIR/portable-timeout.sh"
 
-# Source shared loop library (provides runtime-aware DEFAULT_CODEX_MODEL and other constants)
-# Callers can override by exporting DEFAULT_CODEX_MODEL/DEFAULT_CODEX_EFFORT
-# before invoking this script.
+# Source shared loop library (provides runtime-aware DEFAULT_GEMINI_MODEL and other constants)
+# Callers can override by exporting DEFAULT_GEMINI_MODEL before invoking this script.
 HOOKS_LIB_DIR="$(cd "$SCRIPT_DIR/../hooks/lib" && pwd)"
 source "$HOOKS_LIB_DIR/loop-common.sh"
 
@@ -40,20 +39,19 @@ PLAN_FILE=""
 PLAN_FILE_EXPLICIT=""
 TRACK_PLAN_FILE="false"
 MAX_ITERATIONS="$DEFAULT_MAX_ITERATIONS"
-CODEX_MODEL="$DEFAULT_CODEX_MODEL"
-CODEX_EFFORT="$DEFAULT_CODEX_EFFORT"
-CODEX_TIMEOUT="$DEFAULT_CODEX_TIMEOUT"
+GEMINI_MODEL="$DEFAULT_GEMINI_MODEL"
+GEMINI_TIMEOUT="$DEFAULT_GEMINI_TIMEOUT"
 PUSH_EVERY_ROUND="false"
 BASE_BRANCH=""
 FULL_REVIEW_ROUND="$DEFAULT_FULL_REVIEW_ROUND"
 SKIP_IMPL="false"
 SKIP_IMPL_NO_PLAN="false"
-ASK_CODEX_QUESTION="true"
+ASK_GEMINI_QUESTION="true"
 AGENT_TEAMS="false"
 
 show_help() {
     cat <<HELP_EOF
-start-rlcr-loop - Iterative development with Codex review
+start-rlcr-loop - Iterative development with Gemini review
 
 USAGE:
   /humanize:start-rlcr-loop <path/to/plan.md> [OPTIONS]
@@ -66,10 +64,10 @@ OPTIONS:
   --plan-file <path>   Explicit plan file path (alternative to positional arg)
   --track-plan-file    Indicate plan file should be tracked in git (must be clean)
   --max <N>            Maximum iterations before auto-stop (default: 42)
-  --codex-model <MODEL:EFFORT>
-                       Codex model and reasoning effort for codex exec (default: ${DEFAULT_CODEX_MODEL}:${DEFAULT_CODEX_EFFORT})
-  --codex-timeout <SECONDS>
-                       Timeout for each Codex review in seconds (default: 5400)
+  --gemini-model <MODEL>
+                       Gemini model for review (default: ${DEFAULT_GEMINI_MODEL})
+  --gemini-timeout <SECONDS>
+                       Timeout for each Gemini review in seconds (default: 5400)
   --push-every-round   Require git push after each round (default: commits stay local)
   --base-branch <BRANCH>
                        Base branch for code review phase (default: auto-detect)
@@ -79,8 +77,8 @@ OPTIONS:
                        Full Alignment Checks occur at rounds N-1, 2N-1, 3N-1, etc.
   --skip-impl          Skip implementation phase and go directly to code review
                        Plan file is optional when using this flag
-  --claude-answer-codex
-                       When Codex finds Open Questions, let Claude answer them
+  --claude-answer-gemini
+                       When Gemini finds Open Questions, let Claude answer them
                        directly instead of asking user via AskUserQuestion.
                        NOT RECOMMENDED: Open Questions usually indicate gaps in
                        your plan that deserve human clarification. By default,
@@ -104,15 +102,15 @@ DESCRIPTION:
   3. On exit attempt, Codex reviews the summary
   4. If Codex finds issues, it blocks exit and sends feedback
   5. If Codex outputs "COMPLETE", enters Review Phase
-  6. In Review Phase, codex review checks code quality with [P0-9] markers
+  6. In Review Phase, Gemini reviews code quality via git diff with [P0-9] markers
   7. If code review finds issues, Claude fixes them
   8. When no issues found, enters Finalize Phase and loop ends
 
 EXAMPLES:
   /humanize:start-rlcr-loop docs/feature-plan.md
   /humanize:start-rlcr-loop docs/impl.md --max 20
-  /humanize:start-rlcr-loop plan.md --codex-model ${DEFAULT_CODEX_MODEL}:${DEFAULT_CODEX_EFFORT}
-  /humanize:start-rlcr-loop plan.md --codex-timeout 7200  # 2 hour timeout
+  /humanize:start-rlcr-loop plan.md --gemini-model ${DEFAULT_GEMINI_MODEL}
+  /humanize:start-rlcr-loop plan.md --gemini-timeout 7200  # 2 hour timeout
 
 STOPPING:
   - /humanize:cancel-rlcr-loop   Cancel the active loop
@@ -149,31 +147,24 @@ while [[ $# -gt 0 ]]; do
             MAX_ITERATIONS="$2"
             shift 2
             ;;
-        --codex-model)
+        --gemini-model)
             if [[ -z "${2:-}" ]]; then
-                echo "Error: --codex-model requires a MODEL:EFFORT argument" >&2
+                echo "Error: --gemini-model requires a MODEL argument" >&2
                 exit 1
             fi
-            # Parse MODEL:EFFORT format (portable - works in bash and zsh)
-            if [[ "$2" == *:* ]]; then
-                CODEX_MODEL="${2%%:*}"
-                CODEX_EFFORT="${2#*:}"
-            else
-                CODEX_MODEL="$2"
-                CODEX_EFFORT="$DEFAULT_CODEX_EFFORT"
-            fi
+            GEMINI_MODEL="$2"
             shift 2
             ;;
-        --codex-timeout)
+        --gemini-timeout)
             if [[ -z "${2:-}" ]]; then
-                echo "Error: --codex-timeout requires a number argument (seconds)" >&2
+                echo "Error: --gemini-timeout requires a number argument (seconds)" >&2
                 exit 1
             fi
             if ! [[ "$2" =~ ^[0-9]+$ ]]; then
-                echo "Error: --codex-timeout must be a positive integer (seconds), got: $2" >&2
+                echo "Error: --gemini-timeout must be a positive integer (seconds), got: $2" >&2
                 exit 1
             fi
-            CODEX_TIMEOUT="$2"
+            GEMINI_TIMEOUT="$2"
             shift 2
             ;;
         --push-every-round)
@@ -220,8 +211,8 @@ while [[ $# -gt 0 ]]; do
             SKIP_IMPL="true"
             shift
             ;;
-        --claude-answer-codex)
-            ASK_CODEX_QUESTION="false"
+        --claude-answer-gemini)
+            ASK_GEMINI_QUESTION="false"
             shift
             ;;
         --agent-teams)
@@ -262,8 +253,8 @@ PROJECT_ROOT="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 
 MISSING_DEPS=()
 
-if ! command -v codex &>/dev/null; then
-    MISSING_DEPS+=("codex  - Install: https://github.com/openai/codex")
+if ! command -v gemini &>/dev/null; then
+    MISSING_DEPS+=("gemini - Install: https://github.com/google-gemini/gemini-cli")
 fi
 
 if ! command -v jq &>/dev/null; then
@@ -629,21 +620,12 @@ if [[ "$START_BRANCH" == *[:\#\"\'\`]* ]] || [[ "$START_BRANCH" =~ $'\n' ]]; the
     exit 1
 fi
 
-# Validate codex model for YAML safety
+# Validate gemini model for YAML safety
 # Only alphanumeric, hyphen, underscore, dot allowed
-if [[ ! "$CODEX_MODEL" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-    echo "Error: Codex model contains invalid characters" >&2
-    echo "  Model: $CODEX_MODEL" >&2
+if [[ ! "$GEMINI_MODEL" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    echo "Error: Gemini model contains invalid characters" >&2
+    echo "  Model: $GEMINI_MODEL" >&2
     echo "  Only alphanumeric, hyphen, underscore, dot allowed" >&2
-    exit 1
-fi
-
-# Validate codex effort for YAML safety
-# Only alphanumeric, hyphen, underscore allowed
-if [[ ! "$CODEX_EFFORT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    echo "Error: Codex effort contains invalid characters" >&2
-    echo "  Effort: $CODEX_EFFORT" >&2
-    echo "  Only alphanumeric, hyphen, underscore allowed" >&2
     exit 1
 fi
 
@@ -676,14 +658,14 @@ fi
 
 if [[ -n "$BASE_BRANCH" ]]; then
     # User specified base branch - validate it exists LOCALLY
-    # codex review --base requires a local ref, so remote-only branches won't work
+    # git diff --base requires a local ref, so remote-only branches won't work
     if run_with_timeout "$GIT_TIMEOUT" git -C "$PROJECT_ROOT" show-ref --verify --quiet "refs/heads/$BASE_BRANCH" 2>/dev/null; then
         : # Branch exists locally, good
     else
         # Check if it exists on remote but not locally
         if run_with_timeout "$GIT_TIMEOUT" git -C "$PROJECT_ROOT" ls-remote --heads origin "$BASE_BRANCH" 2>/dev/null | grep -q .; then
             echo "Error: Base branch '$BASE_BRANCH' exists on remote but not locally" >&2
-            echo "  codex review requires a local branch reference" >&2
+            echo "  Gemini code review requires a local branch reference for git diff" >&2
             echo "  Run: git fetch origin $BASE_BRANCH:$BASE_BRANCH" >&2
             exit 1
         else
@@ -694,7 +676,7 @@ if [[ -n "$BASE_BRANCH" ]]; then
     fi
 else
     # Auto-detect base branch
-    # Note: codex review --base requires a LOCAL branch, so we must verify local existence
+    # Note: git diff requires a LOCAL branch, so we must verify local existence
     # Priority 1: Remote default branch (if it exists locally)
     # Guard with || true to prevent pipefail from terminating script when origin is missing
     REMOTE_DEFAULT=$(run_with_timeout "$GIT_TIMEOUT" git -C "$PROJECT_ROOT" remote show origin 2>/dev/null | grep "HEAD branch:" | sed 's/.*HEAD branch:[[:space:]]*//' || true)
@@ -767,7 +749,7 @@ and goes directly to code review.
 No implementation plan was provided - this is expected for skip-impl mode.
 
 The loop will:
-1. Run `codex review` on the current branch changes
+1. Run gemini code review on the current branch changes
 2. If issues are found, Claude will fix them
 3. When no issues remain, enter finalize phase
 
@@ -793,9 +775,8 @@ cat > "$LOOP_DIR/state.md" << EOF
 ---
 current_round: 0
 max_iterations: $MAX_ITERATIONS
-codex_model: $CODEX_MODEL
-codex_effort: $CODEX_EFFORT
-codex_timeout: $CODEX_TIMEOUT
+gemini_model: $GEMINI_MODEL
+gemini_timeout: $GEMINI_TIMEOUT
 push_every_round: $PUSH_EVERY_ROUND
 full_review_round: $FULL_REVIEW_ROUND
 plan_file: $PLAN_FILE
@@ -804,7 +785,7 @@ start_branch: $START_BRANCH
 base_branch: $BASE_BRANCH
 base_commit: $BASE_COMMIT
 review_started: $INITIAL_REVIEW_STARTED
-ask_codex_question: $ASK_CODEX_QUESTION
+ask_gemini_question: $ASK_GEMINI_QUESTION
 session_id:
 agent_teams: $AGENT_TEAMS
 started_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -850,7 +831,7 @@ The goal tracker is not used in skip-impl mode because:
 
 ## What This Loop Does
 
-1. Runs `codex review` on changes between base branch and current branch
+1. Runs gemini code review on changes between base branch and current branch
 2. If issues are found, Claude fixes them iteratively
 3. When no issues remain, enters finalize phase for code simplification
 
@@ -971,7 +952,7 @@ This RLCR loop was started with \`--skip-impl\` flag.
 
 ## What This Means
 
-The loop will automatically run \`codex review\` on your changes when you try to exit.
+The loop will automatically run Gemini code review on your changes when you try to exit.
 If issues are found (marked with [P0-9] priority), you'll need to fix them before the loop ends.
 Do not try to execute anything to trigger the review - just stop and it will run automatically.
 
@@ -1104,17 +1085,15 @@ if [[ "$SKIP_IMPL" == "true" ]]; then
 Mode: Code Review Only (--skip-impl)
 Start Branch: $START_BRANCH
 Base Branch: $BASE_BRANCH
-Codex Model: $CODEX_MODEL
-Codex Effort: $CODEX_EFFORT
-Codex Review Effort: high
-Codex Timeout: ${CODEX_TIMEOUT}s
+Gemini Model: $GEMINI_MODEL
+Gemini Timeout: ${GEMINI_TIMEOUT}s
 Loop Directory: $LOOP_DIR
 
 Skip-impl mode is active. The implementation phase is skipped.
-When you try to exit, codex review will run automatically by itself.
+When you try to exit, Gemini code review will run automatically by itself.
 
 The loop will:
-1. Run codex review on changes between $BASE_BRANCH and $START_BRANCH
+1. Run Gemini code review on changes between $BASE_BRANCH and $START_BRANCH
 2. If issues are found ([P0-9] markers), you'll need to fix them
 3. When no issues remain, enters Finalize Phase and loop ends
 
@@ -1132,18 +1111,16 @@ Plan Tracked: $TRACK_PLAN_FILE
 Start Branch: $START_BRANCH
 Base Branch: $BASE_BRANCH
 Max Iterations: $MAX_ITERATIONS
-Codex Model: $CODEX_MODEL
-Codex Effort: $CODEX_EFFORT
-Codex Review Effort: high
-Codex Timeout: ${CODEX_TIMEOUT}s
+Gemini Model: $GEMINI_MODEL
+Gemini Timeout: ${GEMINI_TIMEOUT}s
 Full Review Round: $FULL_REVIEW_ROUND (Full Alignment Checks at rounds $((FULL_REVIEW_ROUND - 1)), $((2 * FULL_REVIEW_ROUND - 1)), $((3 * FULL_REVIEW_ROUND - 1)), ...)
-Ask User for Codex Questions: $ASK_CODEX_QUESTION
+Ask User for Gemini Questions: $ASK_GEMINI_QUESTION
 Loop Directory: $LOOP_DIR
 
 The loop is now active. When you try to exit:
-1. Codex will review your work summary
+1. Gemini will review your work summary
 2. If issues are found, you'll receive feedback and continue
-3. If Codex outputs "COMPLETE", enters Review Phase (code review)
+3. If Gemini outputs "COMPLETE", enters Review Phase (code review)
 4. Code review checks for [P0-9] issues; if found, you fix them
 5. When no issues found, enters Finalize Phase and loop ends
 

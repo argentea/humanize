@@ -3,19 +3,19 @@
 # Stop Hook for PR loop
 #
 # Intercepts Claude's exit attempts, polls for remote bot reviews,
-# and uses local Codex to validate if bot concerns are addressed.
+# and uses local Gemini to validate if bot concerns are addressed.
 #
 # Key features:
 # - Polls until ALL active bots respond (per-bot tracking with 15min timeout each)
 # - Checks PR state before polling (detects CLOSED/MERGED)
-# - Uses APPROVE marker for Codex approval
+# - Uses APPROVE marker for Gemini approval
 # - Updates active_bots list based on per-bot approval
 #
 # State directory: .humanize/pr-loop/<timestamp>/
 # State file: state.md (current_round, pr_number, active_bots as YAML list, etc.)
 # Resolve file: round-N-pr-resolve.md (Claude's resolution summary)
 # Comment file: round-N-pr-comment.md (Fetched PR comments)
-# Check file: round-N-pr-check.md (Local Codex validation)
+# Check file: round-N-pr-check.md (Local Gemini validation)
 # Feedback file: round-N-pr-feedback.md (Feedback for next round)
 #
 
@@ -25,10 +25,9 @@ set -euo pipefail
 # Default Configuration
 # ========================================
 
-# Override defaults before sourcing loop-common.sh (PR loop uses different model/effort than RLCR)
-DEFAULT_CODEX_MODEL="gpt-5.4"
-DEFAULT_CODEX_EFFORT="medium"
-DEFAULT_CODEX_TIMEOUT=900
+# Override defaults before sourcing loop-common.sh (PR loop uses different model than RLCR)
+DEFAULT_GEMINI_MODEL="gemini-3.1-pro-preview"
+DEFAULT_GEMINI_TIMEOUT=900
 DEFAULT_POLL_INTERVAL=30
 DEFAULT_POLL_TIMEOUT=900  # 15 minutes per bot
 
@@ -94,9 +93,8 @@ parse_pr_loop_state() {
     PR_MAX_ITERATIONS=$(echo "$STATE_FRONTMATTER" | grep "^max_iterations:" | sed "s/max_iterations: *//" | tr -d ' ' || true)
     PR_NUMBER=$(echo "$STATE_FRONTMATTER" | grep "^pr_number:" | sed "s/pr_number: *//" | tr -d ' ' || true)
     PR_START_BRANCH=$(echo "$STATE_FRONTMATTER" | grep "^start_branch:" | sed "s/start_branch: *//; s/^\"//; s/\"\$//" || true)
-    PR_CODEX_MODEL=$(echo "$STATE_FRONTMATTER" | grep "^codex_model:" | sed "s/codex_model: *//" | tr -d ' ' || true)
-    PR_CODEX_EFFORT=$(echo "$STATE_FRONTMATTER" | grep "^codex_effort:" | sed "s/codex_effort: *//" | tr -d ' ' || true)
-    PR_CODEX_TIMEOUT=$(echo "$STATE_FRONTMATTER" | grep "^codex_timeout:" | sed "s/codex_timeout: *//" | tr -d ' ' || true)
+    PR_GEMINI_MODEL=$(echo "$STATE_FRONTMATTER" | grep "^gemini_model:" | sed "s/gemini_model: *//" | tr -d ' ' || true)
+    PR_GEMINI_TIMEOUT=$(echo "$STATE_FRONTMATTER" | grep "^gemini_timeout:" | sed "s/gemini_timeout: *//" | tr -d ' ' || true)
     PR_POLL_INTERVAL=$(echo "$STATE_FRONTMATTER" | grep "^poll_interval:" | sed "s/poll_interval: *//" | tr -d ' ' || true)
     PR_POLL_TIMEOUT=$(echo "$STATE_FRONTMATTER" | grep "^poll_timeout:" | sed "s/poll_timeout: *//" | tr -d ' ' || true)
     PR_STARTED_AT=$(echo "$STATE_FRONTMATTER" | grep "^started_at:" | sed "s/started_at: *//" || true)
@@ -167,9 +165,8 @@ parse_pr_loop_state() {
     # Apply defaults
     PR_CURRENT_ROUND="${PR_CURRENT_ROUND:-0}"
     PR_MAX_ITERATIONS="${PR_MAX_ITERATIONS:-42}"
-    PR_CODEX_MODEL="${PR_CODEX_MODEL:-$DEFAULT_CODEX_MODEL}"
-    PR_CODEX_EFFORT="${PR_CODEX_EFFORT:-$DEFAULT_CODEX_EFFORT}"
-    PR_CODEX_TIMEOUT="${PR_CODEX_TIMEOUT:-$DEFAULT_CODEX_TIMEOUT}"
+    PR_GEMINI_MODEL="${PR_GEMINI_MODEL:-$DEFAULT_GEMINI_MODEL}"
+    PR_GEMINI_TIMEOUT="${PR_GEMINI_TIMEOUT:-$DEFAULT_GEMINI_TIMEOUT}"
     PR_POLL_INTERVAL="${PR_POLL_INTERVAL:-$DEFAULT_POLL_INTERVAL}"
     PR_POLL_TIMEOUT="${PR_POLL_TIMEOUT:-$DEFAULT_POLL_TIMEOUT}"
 }
@@ -1109,9 +1106,8 @@ if [[ "$COMMENT_COUNT" == "0" ]]; then
                 echo "start_branch: $PR_START_BRANCH"
                 echo "configured_bots:${TIMEOUT_CONFIGURED_BOTS_YAML}"
                 echo "active_bots:"
-                echo "codex_model: $PR_CODEX_MODEL"
-                echo "codex_effort: $PR_CODEX_EFFORT"
-                echo "codex_timeout: $PR_CODEX_TIMEOUT"
+                echo "gemini_model: $PR_GEMINI_MODEL"
+                echo "gemini_timeout: $PR_GEMINI_TIMEOUT"
                 echo "poll_interval: $PR_POLL_INTERVAL"
                 echo "poll_timeout: $PR_POLL_TIMEOUT"
                 echo "started_at: $PR_STARTED_AT"
@@ -1231,20 +1227,20 @@ done
 echo "Comments saved to: $COMMENT_FILE" >&2
 
 # ========================================
-# Run Local Codex Review of Bot Feedback
+# Run Local Gemini Review of Bot Feedback
 # ========================================
 
 # Consistent file naming: all round-N files refer to round N
 CHECK_FILE="$LOOP_DIR/round-${NEXT_ROUND}-pr-check.md"
 FEEDBACK_FILE="$LOOP_DIR/round-${NEXT_ROUND}-pr-feedback.md"
 
-echo "Running local Codex review of bot feedback..." >&2
+echo "Running local Gemini review of bot feedback..." >&2
 
-# Build Codex prompt with per-bot analysis
-CODEX_PROMPT_FILE="$LOOP_DIR/round-${NEXT_ROUND}-codex-prompt.md"
+# Build Gemini prompt with per-bot analysis
+GEMINI_PROMPT_FILE="$LOOP_DIR/round-${NEXT_ROUND}-gemini-prompt.md"
 BOT_REVIEW_CONTENT=$(cat "$COMMENT_FILE")
 
-# Build list of expected bots for Codex (all configured bots)
+# Build list of expected bots for Gemini (all configured bots)
 EXPECTED_BOTS_LIST=""
 for bot in "${PR_CONFIGURED_BOTS_ARRAY[@]}"; do
     EXPECTED_BOTS_LIST="${EXPECTED_BOTS_LIST}- ${bot}\n"
@@ -1261,7 +1257,7 @@ After analysis, update the goal tracker at $GOAL_TRACKER_FILE with current statu
 
 GOAL_TRACKER_UPDATE_INSTRUCTIONS=$(load_and_render_safe "$TEMPLATE_DIR" "pr-loop/codex-goal-tracker-update.md" "$GOAL_TRACKER_UPDATE_FALLBACK" "${GOAL_TRACKER_TEMPLATE_VARS[@]}")
 
-cat > "$CODEX_PROMPT_FILE" << EOF
+cat > "$GEMINI_PROMPT_FILE" << EOF
 # PR Review Validation (Per-Bot Analysis)
 
 Analyze the following bot reviews and determine approval status FOR EACH BOT.
@@ -1302,72 +1298,57 @@ List bots that should be removed from active tracking (those with APPROVE status
 $GOAL_TRACKER_UPDATE_INSTRUCTIONS
 EOF
 
-# Check if codex is available
-if ! command -v codex &>/dev/null; then
-    REASON="# Codex Not Found
+# Check if gemini is available
+if ! command -v gemini &>/dev/null; then
+    REASON="# Gemini Not Found
 
-The 'codex' command is not installed or not in PATH.
-PR loop requires Codex CLI to validate bot reviews.
+The 'gemini' command is not installed or not in PATH.
+PR loop requires Gemini CLI to validate bot reviews.
 
 **To fix:**
-1. Install Codex CLI
+1. Install Gemini CLI
 2. Retry the exit
 
 Or use \`/humanize:cancel-pr-loop\` to cancel the loop."
 
-    jq -n --arg reason "$REASON" --arg msg "PR Loop: Codex not found" \
+    jq -n --arg reason "$REASON" --arg msg "PR Loop: Gemini not found" \
         '{"decision": "block", "reason": $reason, "systemMessage": $msg}'
     exit 0
 fi
 
-# Run Codex
-CODEX_ARGS=("-m" "$PR_CODEX_MODEL")
-if [[ -n "$PR_CODEX_EFFORT" ]]; then
-    CODEX_ARGS+=("-c" "model_reasoning_effort=${PR_CODEX_EFFORT}")
-fi
+# Run Gemini
+GEMINI_PROMPT_CONTENT=$(cat "$GEMINI_PROMPT_FILE")
+GEMINI_EXIT_CODE=0
 
-# Determine automation flag based on environment variable
-# Default: Use --full-auto (safe mode with sandbox)
-# If HUMANIZE_CODEX_BYPASS_SANDBOX is "true" or "1": Use --dangerously-bypass-approvals-and-sandbox
-CODEX_AUTO_FLAG="--full-auto"
-if [[ "${HUMANIZE_CODEX_BYPASS_SANDBOX:-}" == "true" ]] || [[ "${HUMANIZE_CODEX_BYPASS_SANDBOX:-}" == "1" ]]; then
-    CODEX_AUTO_FLAG="--dangerously-bypass-approvals-and-sandbox"
-fi
+run_with_timeout "$PR_GEMINI_TIMEOUT" gemini --model "$PR_GEMINI_MODEL" -p "$GEMINI_PROMPT_CONTENT" \
+    > "$CHECK_FILE" 2>/dev/null || GEMINI_EXIT_CODE=$?
 
-CODEX_ARGS+=("$CODEX_AUTO_FLAG" "-C" "$PROJECT_ROOT")
+if [[ $GEMINI_EXIT_CODE -ne 0 ]]; then
+    REASON="# Gemini Review Failed
 
-CODEX_PROMPT_CONTENT=$(cat "$CODEX_PROMPT_FILE")
-CODEX_EXIT_CODE=0
-
-printf '%s' "$CODEX_PROMPT_CONTENT" | run_with_timeout "$PR_CODEX_TIMEOUT" codex exec "${CODEX_ARGS[@]}" - \
-    > "$CHECK_FILE" 2>/dev/null || CODEX_EXIT_CODE=$?
-
-if [[ $CODEX_EXIT_CODE -ne 0 ]]; then
-    REASON="# Codex Review Failed
-
-Codex failed to validate bot reviews (exit code: $CODEX_EXIT_CODE).
+Gemini failed to validate bot reviews (exit code: $GEMINI_EXIT_CODE).
 
 Please retry or cancel the loop."
 
-    jq -n --arg reason "$REASON" --arg msg "PR Loop: Codex review failed" \
+    jq -n --arg reason "$REASON" --arg msg "PR Loop: Gemini review failed" \
         '{"decision": "block", "reason": $reason, "systemMessage": $msg}'
     exit 0
 fi
 
 if [[ ! -s "$CHECK_FILE" ]]; then
-    REASON="# Codex Review Empty
+    REASON="# Gemini Review Empty
 
-Codex produced no output when validating bot reviews.
+Gemini produced no output when validating bot reviews.
 
 Please retry or cancel the loop."
 
-    jq -n --arg reason "$REASON" --arg msg "PR Loop: Codex review empty" \
+    jq -n --arg reason "$REASON" --arg msg "PR Loop: Gemini review empty" \
         '{"decision": "block", "reason": $reason, "systemMessage": $msg}'
     exit 0
 fi
 
 # ========================================
-# Check Codex Result and Update active_bots
+# Check Gemini Result and Update active_bots
 # ========================================
 
 CHECK_CONTENT=$(cat "$CHECK_FILE")
@@ -1426,14 +1407,14 @@ fi
 # Update active_bots in state file
 # ========================================
 
-# Extract approved bots from Codex output and remove them from active_bots
+# Extract approved bots from Gemini output and remove them from active_bots
 # Look for "### Approved Bots" section
 # NOTE: Use awk for more robust extraction that handles:
 #   - Section at end of file (no following ###)
 #   - Section immediately followed by ### (empty section)
 APPROVED_SECTION=$(awk '/^### Approved Bots/{found=1; next} found && /^###/{exit} found{print}' "$CHECK_FILE" || true)
 
-# Extract bots with issues from Codex output (for re-add logic)
+# Extract bots with issues from Gemini output (for re-add logic)
 # Look for "### Per-Bot Status" table and find bots with ISSUES status
 # NOTE: Use awk for more robust extraction
 ISSUES_SECTION=$(awk '/^### Per-Bot Status/{found=1; next} found && /^###/{exit} found{print}' "$CHECK_FILE" || true)
@@ -1444,7 +1425,7 @@ ISSUES_SECTION=$(awk '/^### Per-Bot Status/{found=1; next} found && /^###/{exit}
 declare -a NEW_ACTIVE_BOTS=()
 # NOTE: Using _map_set/get instead of declare -A for macOS Bash 3.2 compatibility
 
-# First, identify bots with issues from Codex output
+# First, identify bots with issues from Gemini output
 while IFS= read -r line; do
     if echo "$line" | grep -qiE '\|[[:space:]]*ISSUES[[:space:]]*\|'; then
         # Extract bot name from table row: | botname | ISSUES | summary |
@@ -1512,7 +1493,7 @@ NEW_ACTIVE_BOTS_YAML=$(build_yaml_list "${NEW_ACTIVE_BOTS[@]}")
 # ========================================
 # Update PR Goal Tracker
 # ========================================
-# Extract issue counts from Codex output and update goal tracker
+# Extract issue counts from Gemini output and update goal tracker
 # Count issues by looking at the Issues Found section
 ISSUES_FOUND_COUNT=0
 ISSUES_RESOLVED_COUNT=0
@@ -1535,9 +1516,9 @@ fi
 
 # Call update_pr_goal_tracker if goal tracker exists
 if [[ -f "$GOAL_TRACKER_FILE" ]]; then
-    # NOTE: Use lowercase "codex" to match configured bot names and avoid duplicate rows
-    # (Codex itself writes rows with lowercase names in goal tracker)
-    BOT_RESULTS_JSON="{\"bot\": \"codex\", \"issues\": $ISSUES_FOUND_COUNT, \"resolved\": $ISSUES_RESOLVED_COUNT}"
+    # NOTE: Use lowercase "gemini" to match configured bot names and avoid duplicate rows
+    # (Gemini itself writes rows with lowercase names in goal tracker)
+    BOT_RESULTS_JSON="{\"bot\": \"gemini\", \"issues\": $ISSUES_FOUND_COUNT, \"resolved\": $ISSUES_RESOLVED_COUNT}"
     update_pr_goal_tracker "$GOAL_TRACKER_FILE" "$NEXT_ROUND" "$BOT_RESULTS_JSON" || true
 fi
 
@@ -1574,9 +1555,8 @@ fi
     echo "start_branch: $PR_START_BRANCH"
     echo "configured_bots:${CONFIGURED_BOTS_YAML}"
     echo "active_bots:${NEW_ACTIVE_BOTS_YAML}"
-    echo "codex_model: $PR_CODEX_MODEL"
-    echo "codex_effort: $PR_CODEX_EFFORT"
-    echo "codex_timeout: $PR_CODEX_TIMEOUT"
+    echo "gemini_model: $PR_GEMINI_MODEL"
+    echo "gemini_timeout: $PR_GEMINI_TIMEOUT"
     echo "poll_interval: $PR_POLL_INTERVAL"
     echo "poll_timeout: $PR_POLL_TIMEOUT"
     echo "started_at: $PR_STARTED_AT"

@@ -35,12 +35,12 @@ The RLCR (Ralph-Loop with Codex Review) loop has two phases:
 **Phase 1: Implementation**
 - AI works on the implementation plan
 - AI writes a summary of work completed
-- Codex reviews the summary for completeness and correctness
+- Gemini reviews the summary for completeness and correctness
 - If issues found → feedback loop continues
-- If Codex outputs "COMPLETE" → enters Review Phase
+- If Gemini outputs "COMPLETE" → enters Review Phase
 
 **Phase 2: Code Review**
-- `codex review --base <branch>` checks code quality
+- Gemini reviews the git diff for code quality
 - Issues marked with `[P0-9]` severity markers
 - If issues found → AI fixes them and continues
 - If no issues → loop completes with Finalize Phase
@@ -86,15 +86,14 @@ Transforms a rough draft document into a structured implementation plan with:
 
 **Common Options:**
 - `--max N` - Maximum iterations before auto-stop (default: 42)
-- `--codex-model MODEL:EFFORT` - Codex model and reasoning effort for `codex exec` (default: gpt-5.4:xhigh)
-- Review phase `codex review` uses `gpt-5.4:high`
-- `--codex-timeout SECONDS` - Timeout for each Codex review (default: 5400)
+- `--gemini-model MODEL` - Gemini model for review (default: gemini-3.1-pro-preview)
+- `--gemini-timeout SECONDS` - Timeout for each Gemini review (default: 5400)
 - `--base-branch BRANCH` - Base branch for code review (auto-detects if not specified)
 - `--full-review-round N` - Interval for full alignment checks (default: 5)
 - `--skip-impl` - Skip implementation phase, go directly to code review
 - `--track-plan-file` - Enforce plan-file immutability when tracked in git
 - `--push-every-round` - Require git push after each round
-- `--claude-answer-codex` - Let Claude answer Codex Open Questions directly (default is AskUserQuestion)
+- `--claude-answer-gemini` - Let Claude answer Gemini Open Questions directly (default is AskUserQuestion)
 - `--agent-teams` - Enable Agent Teams mode
 
 ### Cancel RLCR Loop
@@ -120,8 +119,8 @@ Transforms a rough draft document into a structured implementation plan with:
 
 **Common Options:**
 - `--max N` - Maximum iterations (default: 42)
-- `--codex-model MODEL:EFFORT` - Codex model for validation (default: gpt-5.4:medium)
-- `--codex-timeout SECONDS` - Timeout for Codex validation (default: 900)
+- `--gemini-model MODEL` - Gemini model for validation (default: gemini-3.1-pro-preview)
+- `--gemini-timeout SECONDS` - Timeout for Gemini validation (default: 900)
 
 ### Cancel PR Loop
 
@@ -137,10 +136,10 @@ Transforms a rough draft document into a structured implementation plan with:
 
 Then follow the workflow in this skill to generate the structured plan content.
 
-### Ask Codex (One-shot Consultation)
+### Ask Gemini (One-shot Consultation)
 
 ```bash
-"{{HUMANIZE_RUNTIME_ROOT}}/scripts/ask-codex.sh" [--codex-model MODEL:EFFORT] [--codex-timeout SECONDS] "your question"
+"{{HUMANIZE_RUNTIME_ROOT}}/scripts/ask-gemini.sh" [--gemini-model MODEL] [--gemini-timeout SECONDS] "your question"
 ```
 
 ## Plan File Structure
@@ -209,7 +208,7 @@ The RLCR loop uses a Goal Tracker to prevent goal drift:
 
 ## Prerequisites
 
-- `codex` - OpenAI Codex CLI (for review)
+- `gemini` - Google Gemini CLI (for review)
 - `gh` - GitHub CLI (for PR loop)
 
 ## Directory Structure
@@ -250,7 +249,7 @@ humanize monitor pr     # Monitor PR loop
 
 ## Exit Codes
 
-### ask-codex.sh
+### ask-gemini.sh
 - `0` - Success
 - `1` - Validation error
 - `124` - Timeout

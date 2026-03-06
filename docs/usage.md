@@ -6,8 +6,8 @@ Detailed usage documentation for the Humanize plugin. For installation, see [Ins
 
 Humanize creates an iterative feedback loop with two phases:
 
-1. **Implementation Phase**: Claude works on your plan, Codex reviews summaries until COMPLETE
-2. **Review Phase**: `codex review --base <branch>` checks code quality with `[P0-9]` severity markers
+1. **Implementation Phase**: Claude works on your plan, Gemini reviews summaries until COMPLETE
+2. **Review Phase**: Gemini reviews the git diff with `[P0-9]` severity markers
 
 The loop continues until all acceptance criteria are met or no issues remain.
 
@@ -15,12 +15,12 @@ The loop continues until all acceptance criteria are met or no issues remain.
 
 | Command | Purpose |
 |---------|---------|
-| `/start-rlcr-loop <plan.md>` | Start iterative development with Codex review |
+| `/start-rlcr-loop <plan.md>` | Start iterative development with Gemini review |
 | `/cancel-rlcr-loop` | Cancel active loop |
 | `/gen-plan --input <draft.md> --output <plan.md>` | Generate structured plan from draft |
 | `/start-pr-loop --claude\|--codex` | Start PR review loop with bot monitoring |
 | `/cancel-pr-loop` | Cancel active PR loop |
-| `/ask-codex [question]` | One-shot consultation with Codex |
+| `/ask-gemini [question]` | One-shot consultation with Gemini |
 
 ## Command Reference
 
@@ -32,10 +32,10 @@ The loop continues until all acceptance criteria are met or no issues remain.
 OPTIONS:
   --plan-file <path>     Explicit plan file path (alternative to positional arg)
   --max <N>              Maximum iterations before auto-stop (default: 42)
-  --codex-model <MODEL:EFFORT>
-                         Codex model and reasoning effort (default: gpt-5.4:xhigh)
-  --codex-timeout <SECONDS>
-                         Timeout for each Codex review in seconds (default: 5400)
+  --gemini-model <MODEL>
+                         Gemini model (default: gemini-3.1-pro-preview)
+  --gemini-timeout <SECONDS>
+                         Timeout for each Gemini review in seconds (default: 5400)
   --track-plan-file      Indicate plan file should be tracked in git (must be clean)
   --push-every-round     Require git push after each round (default: commits stay local)
   --base-branch <BRANCH> Base branch for code review phase (default: auto-detect)
@@ -45,7 +45,7 @@ OPTIONS:
                          Full Alignment Checks occur at rounds N-1, 2N-1, 3N-1, etc.
   --skip-impl            Skip implementation phase, go directly to code review
                          Plan file is optional when using this flag
-  --claude-answer-codex  When Codex finds Open Questions, let Claude answer them
+  --claude-answer-gemini When Gemini finds Open Questions, let Claude answer them
                          directly instead of asking user via AskUserQuestion
   --agent-teams          Enable Claude Code Agent Teams mode for parallel development.
                          Requires CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 environment variable.
@@ -84,10 +84,10 @@ BOT FLAGS (at least one required):
 
 OPTIONS:
   --max <N>              Maximum iterations before auto-stop (default: 42)
-  --codex-model <MODEL:EFFORT>
-                         Codex model and reasoning effort (default: gpt-5.4:medium)
-  --codex-timeout <SECONDS>
-                         Timeout for each Codex review in seconds (default: 900)
+  --gemini-model <MODEL>
+                         Gemini model (default: gemini-3.1-pro-preview)
+  --gemini-timeout <SECONDS>
+                         Timeout for each Gemini review in seconds (default: 900)
   -h, --help             Show help message
 ```
 
@@ -98,28 +98,28 @@ The PR loop automates the process of handling GitHub PR reviews from remote bots
 3. Claude analyzes and fixes issues identified by the bot(s)
 4. Pushes changes and triggers re-review by commenting @bot
 5. Stop Hook polls for new bot reviews (every 30s, 15min timeout per bot)
-6. Local Codex validates if remote concerns are approved or have issues
+6. Local Gemini validates if remote concerns are approved or have issues
 7. Loop continues until all bots approve or max iterations reached
 
 **Prerequisites:**
 - GitHub CLI (`gh`) must be installed and authenticated
-- Codex CLI must be installed
+- Gemini CLI must be installed
 - Current branch must have an associated open PR
 
-### ask-codex
+### ask-gemini
 
 ```
-/humanize:ask-codex [OPTIONS] <question or task>
+/humanize:ask-gemini [OPTIONS] <question or task>
 
 OPTIONS:
-  --codex-model <MODEL:EFFORT>
-                         Codex model and reasoning effort (default: gpt-5.4:xhigh)
-  --codex-timeout <SECONDS>
-                         Timeout for the Codex query in seconds (default: 3600)
+  --gemini-model <MODEL>
+                         Gemini model (default: gemini-3.1-pro-preview)
+  --gemini-timeout <SECONDS>
+                         Timeout for the Gemini query in seconds (default: 3600)
   -h, --help             Show help message
 ```
 
-The ask-codex skill sends a one-shot question or task to Codex and returns the response
+The ask-gemini skill sends a one-shot question or task to Gemini and returns the response
 inline. Unlike the RLCR loop, this is a single consultation without iteration -- useful
 for getting a second opinion, reviewing a design, or asking domain-specific questions.
 

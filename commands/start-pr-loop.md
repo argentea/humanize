@@ -1,6 +1,6 @@
 ---
 description: "Start PR review loop with bot monitoring"
-argument-hint: "--claude|--codex [--max N] [--codex-model MODEL:EFFORT] [--codex-timeout SECONDS]"
+argument-hint: "--claude|--codex [--max N] [--gemini-model MODEL] [--gemini-timeout SECONDS]"
 allowed-tools: ["Bash(${CLAUDE_PLUGIN_ROOT}/scripts/setup-pr-loop.sh:*)"]
 hide-from-slash-command-tool: "true"
 ---
@@ -20,7 +20,7 @@ This command starts a PR review loop that:
 3. You analyze and fix issues identified by the bot(s)
 4. Push changes and trigger re-review by commenting @bot
 5. Stop Hook polls for new bot reviews (every 30s, 15min timeout)
-6. Local Codex validates if remote concerns are valid or approved
+6. Local Gemini validates if remote concerns are valid or approved
 
 ## Bot Flags (Required)
 
@@ -53,7 +53,7 @@ Use whatever bot mentions are shown in the initial prompt - they match the flags
 2. **Push changes**: Your fixes must be pushed for bots to review them
 3. **Tag bots**: Use the correct @mention format to trigger bot reviews
 4. **No cheating**: Do not try to exit the loop by editing state files or running cancel commands
-5. **Trust the process**: The Stop Hook manages polling and Codex validation
+5. **Trust the process**: The Stop Hook manages polling and Gemini validation
 
 ## Stopping the Loop
 

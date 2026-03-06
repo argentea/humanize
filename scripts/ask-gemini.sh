@@ -1,20 +1,20 @@
 #!/bin/bash
 #
-# Ask Codex - One-shot consultation with Codex
+# Ask Gemini - One-shot consultation with Gemini
 #
-# Sends a question or task to codex exec and returns the response.
+# Sends a question or task to Gemini CLI and returns the response.
 # This is an active, one-shot skill (unlike the passive RLCR loop).
 #
 # Usage:
-#   ask-codex.sh [--codex-model MODEL:EFFORT] [--codex-timeout SECONDS] [question...]
+#   ask-gemini.sh [--gemini-model MODEL] [--gemini-timeout SECONDS] [question...]
 #
 # Output:
-#   stdout: Codex's response (for Claude to read)
-#   stderr: Status/debug info (model, effort, log paths)
+#   stdout: Gemini's response (for Claude to read)
+#   stderr: Status/debug info (model, log paths)
 #
 # Storage:
 #   Project-local: .humanize/skill/<unique-id>/{input,output,metadata}.md
-#   Cache: ~/.cache/humanize/<sanitized-path>/skill-<unique-id>/codex-run.{cmd,out,log}
+#   Cache: ~/.cache/humanize/<sanitized-path>/skill-<unique-id>/gemini-run.{cmd,out,log}
 #
 
 set -euo pipefail
@@ -28,7 +28,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 # Source portable timeout wrapper
 source "$SCRIPT_DIR/portable-timeout.sh"
 
-# Source shared loop library for DEFAULT_CODEX_MODEL and DEFAULT_CODEX_EFFORT
+# Source shared loop library for DEFAULT_GEMINI_MODEL
 HOOKS_LIB_DIR="$(cd "$SCRIPT_DIR/../hooks/lib" && pwd)"
 source "$HOOKS_LIB_DIR/loop-common.sh"
 
@@ -36,11 +36,10 @@ source "$HOOKS_LIB_DIR/loop-common.sh"
 # Default Configuration
 # ========================================
 
-DEFAULT_ASK_CODEX_TIMEOUT=3600
+DEFAULT_ASK_GEMINI_TIMEOUT=3600
 
-CODEX_MODEL="$DEFAULT_CODEX_MODEL"
-CODEX_EFFORT="$DEFAULT_CODEX_EFFORT"
-CODEX_TIMEOUT="$DEFAULT_ASK_CODEX_TIMEOUT"
+GEMINI_MODEL="$DEFAULT_GEMINI_MODEL"
+GEMINI_TIMEOUT="$DEFAULT_ASK_GEMINI_TIMEOUT"
 
 # ========================================
 # Help
@@ -48,33 +47,28 @@ CODEX_TIMEOUT="$DEFAULT_ASK_CODEX_TIMEOUT"
 
 show_help() {
     cat << 'HELP_EOF'
-ask-codex - One-shot consultation with Codex
+ask-gemini - One-shot consultation with Gemini
 
 USAGE:
-  /humanize:ask-codex [OPTIONS] <question or task>
+  /humanize:ask-gemini [OPTIONS] <question or task>
 
 OPTIONS:
-  --codex-model <MODEL:EFFORT>
-                       Codex model and reasoning effort (default: gpt-5.4:xhigh)
-  --codex-timeout <SECONDS>
-                       Timeout for the Codex query in seconds (default: 3600)
+  --gemini-model <MODEL>
+                       Gemini model (default: gemini-3.1-pro-preview)
+  --gemini-timeout <SECONDS>
+                       Timeout for the Gemini query in seconds (default: 3600)
   -h, --help           Show this help message
 
 DESCRIPTION:
-  Sends a one-shot question or task to Codex and returns the response.
+  Sends a one-shot question or task to Gemini and returns the response.
   Unlike the RLCR loop, this is a single consultation without iteration.
 
   The response is saved to .humanize/skill/<unique-id>/output.md for reference.
 
 EXAMPLES:
-  /humanize:ask-codex How should I structure the authentication module?
-  /humanize:ask-codex --codex-model gpt-5.4:high What are the performance bottlenecks?
-  /humanize:ask-codex --codex-timeout 300 Review the error handling in src/api/
-
-ENVIRONMENT:
-  HUMANIZE_CODEX_BYPASS_SANDBOX
-    Set to "true" or "1" to bypass Codex sandbox protections.
-    WARNING: This is dangerous. See README for details.
+  /humanize:ask-gemini How should I structure the authentication module?
+  /humanize:ask-gemini --gemini-model gemini-3.1-pro-preview What are the performance bottlenecks?
+  /humanize:ask-gemini --gemini-timeout 300 Review the error handling in src/api/
 HELP_EOF
     exit 0
 }
@@ -102,31 +96,24 @@ while [[ $# -gt 0 ]]; do
             OPTIONS_DONE=true
             shift
             ;;
-        --codex-model)
+        --gemini-model)
             if [[ -z "${2:-}" ]]; then
-                echo "Error: --codex-model requires a MODEL:EFFORT argument" >&2
+                echo "Error: --gemini-model requires a MODEL argument" >&2
                 exit 1
             fi
-            # Parse MODEL:EFFORT format (same pattern as setup-rlcr-loop.sh)
-            if [[ "$2" == *:* ]]; then
-                CODEX_MODEL="${2%%:*}"
-                CODEX_EFFORT="${2#*:}"
-            else
-                CODEX_MODEL="$2"
-                CODEX_EFFORT="$DEFAULT_CODEX_EFFORT"
-            fi
+            GEMINI_MODEL="$2"
             shift 2
             ;;
-        --codex-timeout)
+        --gemini-timeout)
             if [[ -z "${2:-}" ]]; then
-                echo "Error: --codex-timeout requires a number argument (seconds)" >&2
+                echo "Error: --gemini-timeout requires a number argument (seconds)" >&2
                 exit 1
             fi
             if ! [[ "$2" =~ ^[0-9]+$ ]]; then
-                echo "Error: --codex-timeout must be a positive integer (seconds), got: $2" >&2
+                echo "Error: --gemini-timeout must be a positive integer (seconds), got: $2" >&2
                 exit 1
             fi
-            CODEX_TIMEOUT="$2"
+            GEMINI_TIMEOUT="$2"
             shift 2
             ;;
         -*)
@@ -143,19 +130,19 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Join question parts into a single string
-QUESTION="${QUESTION_PARTS[*]}"
+# Join question parts into a single string (bash 3.2 safe: empty array is unbound under set -u)
+QUESTION=""
+[[ ${#QUESTION_PARTS[@]} -gt 0 ]] && QUESTION="${QUESTION_PARTS[*]}"
 
 # ========================================
 # Validate Prerequisites
 # ========================================
 
-# Check codex is available
-if ! command -v codex &>/dev/null; then
-    echo "Error: 'codex' command is not installed or not in PATH" >&2
+# Check gemini is available
+if ! command -v gemini &>/dev/null; then
+    echo "Error: 'gemini' command is not installed or not in PATH" >&2
     echo "" >&2
-    echo "Please install Codex CLI: https://github.com/openai/codex" >&2
-    echo "Then retry: /humanize:ask-codex <your question>" >&2
+    echo "Please install Gemini CLI and retry: /humanize:ask-gemini <your question>" >&2
     exit 1
 fi
 
@@ -163,25 +150,17 @@ fi
 if [[ -z "$QUESTION" ]]; then
     echo "Error: No question or task provided" >&2
     echo "" >&2
-    echo "Usage: /humanize:ask-codex [OPTIONS] <question or task>" >&2
+    echo "Usage: /humanize:ask-gemini [OPTIONS] <question or task>" >&2
     echo "" >&2
-    echo "For help: /humanize:ask-codex --help" >&2
+    echo "For help: /humanize:ask-gemini --help" >&2
     exit 1
 fi
 
-# Validate codex model for safety (alphanumeric, hyphen, underscore, dot)
-if [[ ! "$CODEX_MODEL" =~ ^[a-zA-Z0-9._-]+$ ]]; then
-    echo "Error: Codex model contains invalid characters" >&2
-    echo "  Model: $CODEX_MODEL" >&2
+# Validate gemini model for safety (alphanumeric, hyphen, underscore, dot)
+if [[ ! "$GEMINI_MODEL" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    echo "Error: Gemini model contains invalid characters" >&2
+    echo "  Model: $GEMINI_MODEL" >&2
     echo "  Only alphanumeric, hyphen, underscore, dot allowed" >&2
-    exit 1
-fi
-
-# Validate codex effort for safety (alphanumeric, hyphen, underscore)
-if [[ ! "$CODEX_EFFORT" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-    echo "Error: Codex effort contains invalid characters" >&2
-    echo "  Effort: $CODEX_EFFORT" >&2
-    echo "  Only alphanumeric, hyphen, underscore allowed" >&2
     exit 1
 fi
 
@@ -214,7 +193,7 @@ CACHE_DIR="$CACHE_BASE/humanize/$SANITIZED_PROJECT_PATH/skill-$UNIQUE_ID"
 if ! mkdir -p "$CACHE_DIR" 2>/dev/null; then
     CACHE_DIR="$SKILL_DIR/cache"
     mkdir -p "$CACHE_DIR"
-    echo "ask-codex: warning: home cache not writable, using $CACHE_DIR" >&2
+    echo "ask-gemini: warning: home cache not writable, using $CACHE_DIR" >&2
 fi
 
 # ========================================
@@ -222,7 +201,7 @@ fi
 # ========================================
 
 cat > "$SKILL_DIR/input.md" << EOF
-# Ask Codex Input
+# Ask Gemini Input
 
 ## Question
 
@@ -230,57 +209,38 @@ $QUESTION
 
 ## Configuration
 
-- Model: $CODEX_MODEL
-- Effort: $CODEX_EFFORT
-- Timeout: ${CODEX_TIMEOUT}s
+- Model: $GEMINI_MODEL
+- Timeout: ${GEMINI_TIMEOUT}s
 - Timestamp: $TIMESTAMP
 EOF
-
-# ========================================
-# Build Codex Command
-# ========================================
-
-# Build codex exec arguments (same pattern as loop-codex-stop-hook.sh)
-CODEX_EXEC_ARGS=("-m" "$CODEX_MODEL")
-if [[ -n "$CODEX_EFFORT" ]]; then
-    CODEX_EXEC_ARGS+=("-c" "model_reasoning_effort=${CODEX_EFFORT}")
-fi
-
-# Determine automation flag based on environment variable
-CODEX_AUTO_FLAG="--full-auto"
-if [[ "${HUMANIZE_CODEX_BYPASS_SANDBOX:-}" == "true" ]] || [[ "${HUMANIZE_CODEX_BYPASS_SANDBOX:-}" == "1" ]]; then
-    CODEX_AUTO_FLAG="--dangerously-bypass-approvals-and-sandbox"
-fi
-
-CODEX_EXEC_ARGS+=("$CODEX_AUTO_FLAG" "-C" "$PROJECT_ROOT")
 
 # ========================================
 # Save Debug Command
 # ========================================
 
-CODEX_CMD_FILE="$CACHE_DIR/codex-run.cmd"
-CODEX_STDOUT_FILE="$CACHE_DIR/codex-run.out"
-CODEX_STDERR_FILE="$CACHE_DIR/codex-run.log"
+GEMINI_CMD_FILE="$CACHE_DIR/gemini-run.cmd"
+GEMINI_STDOUT_FILE="$CACHE_DIR/gemini-run.out"
+GEMINI_STDERR_FILE="$CACHE_DIR/gemini-run.log"
 
 {
-    echo "# Codex ask-codex invocation debug info"
+    echo "# Gemini ask-gemini invocation debug info"
     echo "# Timestamp: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "# Working directory: $PROJECT_ROOT"
-    echo "# Timeout: $CODEX_TIMEOUT seconds"
+    echo "# Timeout: $GEMINI_TIMEOUT seconds"
     echo ""
-    echo "codex exec ${CODEX_EXEC_ARGS[*]} \"<prompt>\""
+    echo "gemini --model $GEMINI_MODEL -p \"<prompt>\""
     echo ""
     echo "# Prompt content:"
     echo "$QUESTION"
-} > "$CODEX_CMD_FILE"
+} > "$GEMINI_CMD_FILE"
 
 # ========================================
-# Run Codex
+# Run Gemini
 # ========================================
 
-echo "ask-codex: model=$CODEX_MODEL effort=$CODEX_EFFORT timeout=${CODEX_TIMEOUT}s" >&2
-echo "ask-codex: cache=$CACHE_DIR" >&2
-echo "ask-codex: running codex exec..." >&2
+echo "ask-gemini: model=$GEMINI_MODEL timeout=${GEMINI_TIMEOUT}s" >&2
+echo "ask-gemini: cache=$CACHE_DIR" >&2
+echo "ask-gemini: running gemini..." >&2
 
 # Portable epoch-to-ISO8601 formatter (GNU date -d vs BSD date -r)
 epoch_to_iso() {
@@ -292,34 +252,33 @@ epoch_to_iso() {
 
 START_TIME=$(date +%s)
 
-CODEX_EXIT_CODE=0
-printf '%s' "$QUESTION" | run_with_timeout "$CODEX_TIMEOUT" codex exec "${CODEX_EXEC_ARGS[@]}" - \
-    > "$CODEX_STDOUT_FILE" 2> "$CODEX_STDERR_FILE" || CODEX_EXIT_CODE=$?
+GEMINI_EXIT_CODE=0
+run_with_timeout "$GEMINI_TIMEOUT" gemini --model "$GEMINI_MODEL" -p "$QUESTION" \
+    > "$GEMINI_STDOUT_FILE" 2> "$GEMINI_STDERR_FILE" || GEMINI_EXIT_CODE=$?
 
 END_TIME=$(date +%s)
 DURATION=$((END_TIME - START_TIME))
 
-echo "ask-codex: exit_code=$CODEX_EXIT_CODE duration=${DURATION}s" >&2
+echo "ask-gemini: exit_code=$GEMINI_EXIT_CODE duration=${DURATION}s" >&2
 
 # ========================================
 # Handle Results
 # ========================================
 
 # Check for timeout
-if [[ $CODEX_EXIT_CODE -eq 124 ]]; then
-    echo "Error: Codex timed out after ${CODEX_TIMEOUT} seconds" >&2
+if [[ $GEMINI_EXIT_CODE -eq 124 ]]; then
+    echo "Error: Gemini timed out after ${GEMINI_TIMEOUT} seconds" >&2
     echo "" >&2
     echo "Try increasing the timeout:" >&2
-    echo "  /humanize:ask-codex --codex-timeout $((CODEX_TIMEOUT * 2)) <your question>" >&2
+    echo "  /humanize:ask-gemini --gemini-timeout $((GEMINI_TIMEOUT * 2)) <your question>" >&2
     echo "" >&2
     echo "Debug logs: $CACHE_DIR" >&2
 
     # Save metadata even on timeout
     cat > "$SKILL_DIR/metadata.md" << EOF
 ---
-model: $CODEX_MODEL
-effort: $CODEX_EFFORT
-timeout: $CODEX_TIMEOUT
+model: $GEMINI_MODEL
+timeout: $GEMINI_TIMEOUT
 exit_code: 124
 duration: ${DURATION}s
 status: timeout
@@ -330,12 +289,12 @@ EOF
 fi
 
 # Check for non-zero exit
-if [[ $CODEX_EXIT_CODE -ne 0 ]]; then
-    echo "Error: Codex exited with code $CODEX_EXIT_CODE" >&2
-    if [[ -s "$CODEX_STDERR_FILE" ]]; then
+if [[ $GEMINI_EXIT_CODE -ne 0 ]]; then
+    echo "Error: Gemini exited with code $GEMINI_EXIT_CODE" >&2
+    if [[ -s "$GEMINI_STDERR_FILE" ]]; then
         echo "" >&2
-        echo "Codex stderr (last 20 lines):" >&2
-        tail -20 "$CODEX_STDERR_FILE" >&2
+        echo "Gemini stderr (last 20 lines):" >&2
+        tail -20 "$GEMINI_STDERR_FILE" >&2
     fi
     echo "" >&2
     echo "Debug logs: $CACHE_DIR" >&2
@@ -343,34 +302,32 @@ if [[ $CODEX_EXIT_CODE -ne 0 ]]; then
     # Save metadata
     cat > "$SKILL_DIR/metadata.md" << EOF
 ---
-model: $CODEX_MODEL
-effort: $CODEX_EFFORT
-timeout: $CODEX_TIMEOUT
-exit_code: $CODEX_EXIT_CODE
+model: $GEMINI_MODEL
+timeout: $GEMINI_TIMEOUT
+exit_code: $GEMINI_EXIT_CODE
 duration: ${DURATION}s
 status: error
 started_at: $(epoch_to_iso "$START_TIME")
 ---
 EOF
-    exit "$CODEX_EXIT_CODE"
+    exit "$GEMINI_EXIT_CODE"
 fi
 
 # Check for empty stdout
-if [[ ! -s "$CODEX_STDOUT_FILE" ]]; then
-    echo "Error: Codex returned empty response" >&2
-    if [[ -s "$CODEX_STDERR_FILE" ]]; then
+if [[ ! -s "$GEMINI_STDOUT_FILE" ]]; then
+    echo "Error: Gemini returned empty response" >&2
+    if [[ -s "$GEMINI_STDERR_FILE" ]]; then
         echo "" >&2
-        echo "Codex stderr (last 20 lines):" >&2
-        tail -20 "$CODEX_STDERR_FILE" >&2
+        echo "Gemini stderr (last 20 lines):" >&2
+        tail -20 "$GEMINI_STDERR_FILE" >&2
     fi
     echo "" >&2
     echo "Debug logs: $CACHE_DIR" >&2
 
     cat > "$SKILL_DIR/metadata.md" << EOF
 ---
-model: $CODEX_MODEL
-effort: $CODEX_EFFORT
-timeout: $CODEX_TIMEOUT
+model: $GEMINI_MODEL
+timeout: $GEMINI_TIMEOUT
 exit_code: 0
 duration: ${DURATION}s
 status: empty_response
@@ -384,15 +341,14 @@ fi
 # Save Output and Metadata
 # ========================================
 
-# Save Codex response to project-local storage
-cp "$CODEX_STDOUT_FILE" "$SKILL_DIR/output.md"
+# Save Gemini response to project-local storage
+cp "$GEMINI_STDOUT_FILE" "$SKILL_DIR/output.md"
 
 # Save metadata
 cat > "$SKILL_DIR/metadata.md" << EOF
 ---
-model: $CODEX_MODEL
-effort: $CODEX_EFFORT
-timeout: $CODEX_TIMEOUT
+model: $GEMINI_MODEL
+timeout: $GEMINI_TIMEOUT
 exit_code: 0
 duration: ${DURATION}s
 status: success
@@ -400,11 +356,11 @@ started_at: $(epoch_to_iso "$START_TIME")
 ---
 EOF
 
-echo "ask-codex: response saved to $SKILL_DIR/output.md" >&2
+echo "ask-gemini: response saved to $SKILL_DIR/output.md" >&2
 
 # ========================================
 # Output Response
 # ========================================
 
-# Output Codex's response to stdout (clean output for Claude to read)
-cat "$CODEX_STDOUT_FILE"
+# Output Gemini's response to stdout (clean output for Claude to read)
+cat "$GEMINI_STDOUT_FILE"

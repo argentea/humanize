@@ -9,7 +9,7 @@ if [[ -f "$HUMANIZE_SCRIPT_DIR/lib/monitor-common.sh" ]]; then
     source "$HUMANIZE_SCRIPT_DIR/lib/monitor-common.sh"
 fi
 
-# Source shared loop library (provides DEFAULT_CODEX_MODEL and other constants)
+# Source shared loop library (provides DEFAULT_GEMINI_MODEL and other constants)
 HUMANIZE_HOOKS_LIB_DIR="$(cd "$HUMANIZE_SCRIPT_DIR/../hooks/lib" && pwd)"
 if [[ -f "$HUMANIZE_HOOKS_LIB_DIR/loop-common.sh" ]]; then
     source "$HUMANIZE_HOOKS_LIB_DIR/loop-common.sh"
@@ -245,11 +245,11 @@ _humanize_monitor_codex() {
         monitor_find_latest_session "$loop_dir"
     }
 
-    # Function to find the latest codex log file for a specific session
+    # Function to find the latest gemini log file for a specific session
     # Log files are now in $HOME/.cache/humanize/<sanitized-project-path>/<timestamp>/ to avoid context pollution
     # Respects XDG_CACHE_HOME for testability in restricted environments
-    # Searches for both implementation phase logs (codex-run.log) and review phase logs (codex-review.log)
-    # Usage: _find_latest_codex_log [session_dir]
+    # Searches for both implementation phase logs (gemini-run.log) and review phase logs (gemini-review.log)
+    # Usage: _find_latest_gemini_log [session_dir]
     #   If session_dir is provided, only search within that session's cache directory
     #   If not provided, returns empty (we now require explicit session)
     _find_latest_codex_log() {
@@ -273,19 +273,19 @@ _humanize_monitor_codex() {
         local session_name=$(basename "$target_session_dir")
 
         # Helper to extract round number from log filename
-        # Handles both codex-run.log and codex-review.log patterns
+        # Handles both gemini-run.log and gemini-review.log patterns
         _extract_round_num() {
             local basename="$1"
             local round="${basename#round-}"
-            # Remove either -codex-run.log or -codex-review.log suffix
-            round="${round%%-codex-run.log}"
-            round="${round%%-codex-review.log}"
+            # Remove either -gemini-run.log or -gemini-review.log suffix
+            round="${round%%-gemini-run.log}"
+            round="${round%%-gemini-review.log}"
             echo "$round"
         }
 
         # Helper to detect log file type
         _is_review_log() {
-            [[ "$1" == *-codex-review.log ]]
+            [[ "$1" == *-gemini-review.log ]]
         }
 
         # Look for log files in the project-specific cache directory for this session
@@ -299,7 +299,7 @@ _humanize_monitor_codex() {
         local max_run_round=-1
         local min_review_round=-1
 
-        # Search for both implementation phase (codex-run) and review phase (codex-review) logs
+        # Search for both implementation phase (gemini-run) and review phase (gemini-review) logs
         # Use find with -o (OR) to match both patterns
         while IFS= read -r log_file; do
             [[ -z "$log_file" ]] && continue
@@ -323,13 +323,13 @@ _humanize_monitor_codex() {
                 latest="$log_file"
                 latest_round="$round_num"
             fi
-        done < <(find "$cache_dir" -maxdepth 1 \( -name 'round-*-codex-run.log' -o -name 'round-*-codex-review.log' \) -type f 2>/dev/null)
+        done < <(find "$cache_dir" -maxdepth 1 \( -name 'round-*-gemini-run.log' -o -name 'round-*-gemini-review.log' \) -type f 2>/dev/null)
 
-        # Defensive check: codex-run round must be strictly less than codex-review round
+        # Defensive check: gemini-run round must be strictly less than gemini-review round
         # If review phase exists, all review rounds must be > all run rounds
         if [[ "$max_run_round" -ge 0 ]] && [[ "$min_review_round" -ge 0 ]]; then
             if [[ "$max_run_round" -ge "$min_review_round" ]]; then
-                echo "ERROR: Inconsistent log state in session $session_name: codex-run round ($max_run_round) >= codex-review round ($min_review_round)" >&2
+                echo "ERROR: Inconsistent log state in session $session_name: gemini-run round ($max_run_round) >= gemini-review round ($min_review_round)" >&2
                 echo ""
                 return 1
             fi
@@ -354,16 +354,15 @@ _humanize_monitor_codex() {
         local current_round=$(grep -E "^current_round:" "$state_file" 2>/dev/null | sed 's/current_round: *//')
         local max_iterations=$(grep -E "^max_iterations:" "$state_file" 2>/dev/null | sed 's/max_iterations: *//')
         local full_review_round=$(grep -E "^full_review_round:" "$state_file" 2>/dev/null | sed 's/full_review_round: *//')
-        local codex_model=$(grep -E "^codex_model:" "$state_file" 2>/dev/null | sed 's/codex_model: *//')
-        local codex_effort=$(grep -E "^codex_effort:" "$state_file" 2>/dev/null | sed 's/codex_effort: *//')
+        local gemini_model=$(grep -E "^gemini_model:" "$state_file" 2>/dev/null | sed 's/gemini_model: *//')
         local started_at=$(grep -E "^started_at:" "$state_file" 2>/dev/null | sed 's/started_at: *//')
         local plan_file=$(grep -E "^plan_file:" "$state_file" 2>/dev/null | sed 's/plan_file: *//')
-        local ask_codex_question=$(grep -E "^ask_codex_question:" "$state_file" 2>/dev/null | sed 's/ask_codex_question: *//' | tr -d ' ')
+        local ask_gemini_question=$(grep -E "^ask_gemini_question:" "$state_file" 2>/dev/null | sed 's/ask_gemini_question: *//' | tr -d ' ')
         local review_started=$(grep -E "^review_started:" "$state_file" 2>/dev/null | sed 's/review_started: *//' | tr -d ' ')
         local agent_teams=$(grep -E "^agent_teams:" "$state_file" 2>/dev/null | sed 's/agent_teams: *//' | tr -d ' ')
         local push_every_round=$(grep -E "^push_every_round:" "$state_file" 2>/dev/null | sed 's/push_every_round: *//' | tr -d ' ')
 
-        echo "${current_round:-N/A}|${max_iterations:-N/A}|${full_review_round:-N/A}|${codex_model:-N/A}|${codex_effort:-N/A}|${started_at:-N/A}|${plan_file:-N/A}|${ask_codex_question:-false}|${review_started:-false}|${agent_teams:-}|${push_every_round:-}"
+        echo "${current_round:-N/A}|${max_iterations:-N/A}|${full_review_round:-N/A}|${gemini_model:-N/A}|${started_at:-N/A}|${plan_file:-N/A}|${ask_gemini_question:-false}|${review_started:-false}|${agent_teams:-}|${push_every_round:-}"
     }
 
     # Internal wrappers that call top-level functions
@@ -395,14 +394,13 @@ _humanize_monitor_codex() {
         local current_round="${state_parts[0]}"
         local max_iterations="${state_parts[1]}"
         local full_review_round="${state_parts[2]}"
-        local codex_model="${state_parts[3]}"
-        local codex_effort="${state_parts[4]}"
-        local started_at="${state_parts[5]}"
-        local plan_file="${state_parts[6]}"
-        local ask_codex_question="${state_parts[7]:-false}"
-        local review_started="${state_parts[8]:-false}"
-        local agent_teams="${state_parts[9]:-}"
-        local push_every_round="${state_parts[10]:-}"
+        local gemini_model="${state_parts[3]}"
+        local started_at="${state_parts[4]}"
+        local plan_file="${state_parts[5]}"
+        local ask_gemini_question="${state_parts[6]:-false}"
+        local review_started="${state_parts[7]:-false}"
+        local agent_teams="${state_parts[8]:-}"
+        local push_every_round="${state_parts[9]:-}"
 
         # Parse goal-tracker.md
         local -a goal_parts
@@ -480,7 +478,7 @@ _humanize_monitor_codex() {
             fi
             push_segment=" | Push Every Round: ${push_color}${push_display}${reset}"
         fi
-        printf "${green}Round:${reset}    ${bold}${current_round}${reset} / ${max_iterations}${full_review_display} | ${yellow}Model:${reset} ${codex_model} (${codex_effort})${push_segment}${clr_eol}\n"
+        printf "${green}Round:${reset}    ${bold}${current_round}${reset} / ${max_iterations}${full_review_display} | ${yellow}Model:${reset} ${gemini_model}${push_segment}${clr_eol}\n"
 
         # Loop status line with color based on status
         # Colors: Active=yellow, Complete=green, Finalize=cyan, Stop states=red, Others=orange
@@ -528,10 +526,10 @@ _humanize_monitor_codex() {
                 status_line="${orange}${first_char}${rest}${reset}"
                 ;;
         esac
-        # Display ask_codex_question setting (On/Off)
+        # Display ask_gemini_question setting (On/Off)
         local ask_q_display="Off"
         local ask_q_color="${dim}"
-        if [[ "$ask_codex_question" == "true" ]]; then
+        if [[ "$ask_gemini_question" == "true" ]]; then
             ask_q_display="On"
             ask_q_color="${green}"
         fi
@@ -546,7 +544,7 @@ _humanize_monitor_codex() {
             fi
             team_mode_segment=" | Team Mode: ${team_color}${team_display}${reset}"
         fi
-        printf "${magenta}Status:${reset}   ${status_line} | Codex Ask Question: ${ask_q_color}${ask_q_display}${reset}${team_mode_segment}${clr_eol}\n"
+        printf "${magenta}Status:${reset}   ${status_line} | Gemini Ask Question: ${ask_q_color}${ask_q_display}${reset}${team_mode_segment}${clr_eol}\n"
 
         # Progress line (color based on completion status)
         local ac_color="${green}"
@@ -1125,7 +1123,7 @@ humanize() {
                     echo "Subcommands:"
                     echo "  rlcr    Monitor the latest RLCR loop log from .humanize/rlcr"
                     echo "  pr      Monitor the latest PR loop from .humanize/pr-loop"
-                    echo "  skill   Monitor ask-codex skill invocations from .humanize/skill"
+                    echo "  skill   Monitor ask-gemini skill invocations from .humanize/skill"
                     echo ""
                     echo "Features:"
                     echo "  - Fixed status bar showing session info, round progress, model config"
@@ -1142,7 +1140,7 @@ humanize() {
             echo "Commands:"
             echo "  monitor rlcr    Monitor the latest RLCR loop log"
             echo "  monitor pr      Monitor the latest PR loop"
-            echo "  monitor skill   Monitor ask-codex skill invocations"
+            echo "  monitor skill   Monitor ask-gemini skill invocations"
             return 1
             ;;
     esac
@@ -1266,8 +1264,7 @@ _humanize_monitor_pr() {
         local start_branch=$(echo "$frontmatter" | grep "^start_branch:" | sed "s/start_branch: *//" | tr -d '"' || true)
         local configured_bots=$(echo "$frontmatter" | sed -n '/^configured_bots:$/,/^[a-z_]*:/{ /^  - /{ s/^  - //; p; } }' | tr '\n' ',' | sed 's/,$//')
         local active_bots=$(echo "$frontmatter" | sed -n '/^active_bots:$/,/^[a-z_]*:/{ /^  - /{ s/^  - //; p; } }' | tr '\n' ',' | sed 's/,$//')
-        local codex_model=$(echo "$frontmatter" | grep "^codex_model:" | sed "s/codex_model: *//" | tr -d ' ')
-        local codex_effort=$(echo "$frontmatter" | grep "^codex_effort:" | sed "s/codex_effort: *//" | tr -d ' ')
+        local gemini_model=$(echo "$frontmatter" | grep "^gemini_model:" | sed "s/gemini_model: *//" | tr -d ' ')
         local started_at=$(echo "$frontmatter" | grep "^started_at:" | sed "s/started_at: *//" || true)
 
         # Apply defaults
@@ -1277,11 +1274,10 @@ _humanize_monitor_pr() {
         start_branch=${start_branch:-"?"}
         configured_bots=${configured_bots:-"none"}
         active_bots=${active_bots:-"none"}
-        codex_model=${codex_model:-"$DEFAULT_CODEX_MODEL"}
-        codex_effort=${codex_effort:-"medium"}
+        gemini_model=${gemini_model:-"$DEFAULT_GEMINI_MODEL"}
         started_at=${started_at:-"N/A"}
 
-        echo "$current_round|$max_iterations|$pr_number|$start_branch|$configured_bots|$active_bots|$codex_model|$codex_effort|$started_at"
+        echo "$current_round|$max_iterations|$pr_number|$start_branch|$configured_bots|$active_bots|$gemini_model|$started_at"
     }
 
     # Draw the status bar at the top
@@ -1297,7 +1293,7 @@ _humanize_monitor_pr() {
         [[ -z "$loop_status" ]] && loop_status="${state_info#*|}"
 
         local state_values=$(_pr_parse_state_md "$state_file")
-        IFS='|' read -r current_round max_iterations pr_number start_branch configured_bots active_bots codex_model codex_effort started_at <<< "$state_values"
+        IFS='|' read -r current_round max_iterations pr_number start_branch configured_bots active_bots gemini_model started_at <<< "$state_values"
 
         # Save cursor position and move to top
         tput sc
@@ -1313,7 +1309,7 @@ _humanize_monitor_pr() {
         local session_basename=$(basename "$session_dir")
         printf "${bg}${bold}%-${term_width}s${reset}${clr_eol}\n" " PR Loop Monitor"
         printf "${cyan}Session:${reset} ${session_basename}    ${cyan}PR:${reset} #${pr_number}    ${cyan}Branch:${reset} ${start_branch}${clr_eol}\n"
-        printf "${green}Round:${reset}   ${bold}${current_round}${reset} / ${max_iterations}    ${yellow}Codex:${reset} ${codex_model} (${codex_effort})${clr_eol}\n"
+        printf "${green}Round:${reset}   ${bold}${current_round}${reset} / ${max_iterations}    ${yellow}Gemini:${reset} ${gemini_model}${clr_eol}\n"
 
         # Detect phase and determine status color
         local phase=""
@@ -1451,7 +1447,7 @@ _humanize_monitor_pr() {
         fi
 
         local state_values=$(_pr_parse_state_md "$state_file")
-        IFS='|' read -r current_round max_iterations pr_number start_branch configured_bots active_bots codex_model codex_effort started_at <<< "$state_values"
+        IFS='|' read -r current_round max_iterations pr_number start_branch configured_bots active_bots gemini_model started_at <<< "$state_values"
 
         # Get phase for --once mode display
         local phase=""
@@ -1478,7 +1474,7 @@ _humanize_monitor_pr() {
         echo "Active Bots:     ${active_bots:-none}"
         echo ""
         echo "Round:         $current_round / $max_iterations"
-        echo "Codex:         $codex_model:$codex_effort"
+        echo "Gemini:        $gemini_model"
         echo "Started:       $started_at"
         echo ""
         echo "=========================================="

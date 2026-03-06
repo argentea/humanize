@@ -3,13 +3,13 @@
 # monitor-skill.sh - Skill monitor for humanize
 #
 # Provides the _humanize_monitor_skill function for monitoring
-# ask-codex skill invocations from .humanize/skill directory.
+# ask-gemini skill invocations from .humanize/skill directory.
 #
 # This file is sourced by humanize.sh and depends on:
 # - monitor-common.sh (monitor_get_yaml_value, monitor_format_timestamp, etc.)
 # - humanize.sh (humanize_split_to_array)
 
-# Monitor ask-codex skill invocations from .humanize/skill
+# Monitor ask-gemini skill invocations from .humanize/skill
 # Shows a fixed status bar with aggregate stats and latest invocation details,
 # with live output display in the scrollable area below.
 _humanize_monitor_skill() {
@@ -35,7 +35,7 @@ _humanize_monitor_skill() {
     # Check if .humanize/skill exists
     if [[ ! -d "$skill_dir" ]]; then
         echo "Error: $skill_dir directory not found in current directory"
-        echo "Run /humanize:ask-codex first to create skill invocations"
+        echo "Run /humanize:ask-gemini first to create skill invocations"
         return 1
     fi
 
@@ -140,12 +140,12 @@ _humanize_monitor_skill() {
             local c="$1" prefer_log="$2"
             [[ ! -d "$c" ]] && return
             if [[ "$prefer_log" == "true" ]]; then
-                [[ -f "$c/codex-run.log" && -s "$c/codex-run.log" ]] && { echo "$c/codex-run.log"; return; }
-                [[ -f "$c/codex-run.out" && -s "$c/codex-run.out" ]] && { echo "$c/codex-run.out"; return; }
-                [[ -f "$c/codex-run.log" ]] && { echo "$c/codex-run.log"; return; }
+                [[ -f "$c/gemini-run.log" && -s "$c/gemini-run.log" ]] && { echo "$c/gemini-run.log"; return; }
+                [[ -f "$c/gemini-run.out" && -s "$c/gemini-run.out" ]] && { echo "$c/gemini-run.out"; return; }
+                [[ -f "$c/gemini-run.log" ]] && { echo "$c/gemini-run.log"; return; }
             else
-                [[ -f "$c/codex-run.out" && -s "$c/codex-run.out" ]] && { echo "$c/codex-run.out"; return; }
-                [[ -f "$c/codex-run.log" && -s "$c/codex-run.log" ]] && { echo "$c/codex-run.log"; return; }
+                [[ -f "$c/gemini-run.out" && -s "$c/gemini-run.out" ]] && { echo "$c/gemini-run.out"; return; }
+                [[ -f "$c/gemini-run.log" && -s "$c/gemini-run.log" ]] && { echo "$c/gemini-run.log"; return; }
             fi
         }
 
@@ -185,18 +185,16 @@ _humanize_monitor_skill() {
         local tmo="${stats[3]}" empty="${stats[4]}" running="${stats[5]}"
 
         # Parse latest invocation metadata
-        local inv_status="running" model="N/A" effort="N/A" duration="N/A" started_at="N/A"
+        local inv_status="running" model="N/A" duration="N/A" started_at="N/A"
         if [[ -n "$latest_dir" && -f "$latest_dir/metadata.md" ]]; then
             inv_status=$(monitor_get_yaml_value "status" "$latest_dir/metadata.md")
             model=$(monitor_get_yaml_value "model" "$latest_dir/metadata.md")
-            effort=$(monitor_get_yaml_value "effort" "$latest_dir/metadata.md")
             duration=$(monitor_get_yaml_value "duration" "$latest_dir/metadata.md")
             started_at=$(monitor_get_yaml_value "started_at" "$latest_dir/metadata.md")
         elif [[ -n "$latest_dir" && -f "$latest_dir/input.md" ]]; then
             model=$(grep -E '^- Model:' "$latest_dir/input.md" 2>/dev/null | sed 's/- Model: //')
-            effort=$(grep -E '^- Effort:' "$latest_dir/input.md" 2>/dev/null | sed 's/- Effort: //')
         fi
-        inv_status="${inv_status:-unknown}"; model="${model:-N/A}"; effort="${effort:-N/A}"
+        inv_status="${inv_status:-unknown}"; model="${model:-N/A}"
 
         # Status color
         local status_color="$dim"
@@ -249,7 +247,7 @@ _humanize_monitor_skill() {
         [[ "$running" -gt 0 ]] && printf " | ${yellow}${running} running${reset}"
         printf "${clr_eol}\n"
         # Line 3: Focused invocation status + model + duration
-        printf "${magenta}Focused:${reset}  ${status_color}${inv_status}${reset} | ${yellow}Model:${reset} ${model} (${effort}) | ${cyan}Duration:${reset} ${duration:-N/A}${clr_eol}\n"
+        printf "${magenta}Focused:${reset}  ${status_color}${inv_status}${reset} | ${yellow}Model:${reset} ${model} | ${cyan}Duration:${reset} ${duration:-N/A}${clr_eol}\n"
         # Line 4: Started at
         printf "${cyan}Started:${reset}  ${start_display}${clr_eol}\n"
         # Line 5: Question
@@ -282,11 +280,10 @@ _humanize_monitor_skill() {
 
         local -a stats
         humanize_split_to_array stats "$(_skill_count_stats)"
-        local inv_status="running" model="N/A" effort="N/A" duration="N/A" started_at="N/A"
+        local inv_status="running" model="N/A" duration="N/A" started_at="N/A"
         if [[ -f "$focus_dir/metadata.md" ]]; then
             inv_status=$(monitor_get_yaml_value "status" "$focus_dir/metadata.md")
             model=$(monitor_get_yaml_value "model" "$focus_dir/metadata.md")
-            effort=$(monitor_get_yaml_value "effort" "$focus_dir/metadata.md")
             duration=$(monitor_get_yaml_value "duration" "$focus_dir/metadata.md")
             started_at=$(monitor_get_yaml_value "started_at" "$focus_dir/metadata.md")
         fi
@@ -302,7 +299,7 @@ _humanize_monitor_skill() {
         echo ""
         echo "Focused: $(basename "$focus_dir")"
         echo "  Status:   ${inv_status:-unknown}"
-        echo "  Model:    ${model:-N/A} (${effort:-N/A})"
+        echo "  Model:    ${model:-N/A}"
         echo "  Duration: ${duration:-N/A}"
         echo "  Started:  ${started_at:-N/A}"
         echo "  Question: $question"

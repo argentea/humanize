@@ -58,8 +58,8 @@ TEST_SUITES=(
     # Session ID and Agent Teams tests
     "test-session-id.sh"
     "test-agent-teams.sh"
-    # Ask Codex tests
-    "test-ask-codex.sh"
+    # Ask Gemini tests
+    "test-ask-gemini.sh"
     # Skill monitor tests
     "test-skill-monitor.sh"
     # Robustness tests

@@ -1,6 +1,6 @@
 # Humanize
 
-**Current Version: 1.14.0**
+**Current Version: 1.15.0**
 
 > Derived from the [GAAC (GitHub-as-a-Context)](https://github.com/SihaoLiu/gaac) project.
 
@@ -9,7 +9,7 @@ A Claude Code plugin that provides iterative development with independent AI rev
 ## Core Concepts
 
 - **Iteration over Perfection** -- Instead of expecting perfect output in one shot, Humanize leverages continuous feedback loops where issues are caught early and refined incrementally.
-- **One Build + One Review** -- Claude implements, Codex independently reviews. No blind spots.
+- **One Build + One Review** -- Claude implements, Gemini independently reviews. No blind spots.
 - **Ralph Loop with Swarm Mode** -- Iterative refinement continues until all acceptance criteria are met. Optionally parallelize with Agent Teams.
 
 ## How It Works
@@ -18,7 +18,7 @@ A Claude Code plugin that provides iterative development with independent AI rev
   <img src="docs/images/rlcr-workflow.svg" alt="RLCR Workflow" width="680"/>
 </p>
 
-The loop has two phases: **Implementation** (Claude works, Codex reviews summaries) and **Code Review** (Codex checks code quality with severity markers). Issues feed back into implementation until resolved.
+The loop has two phases: **Implementation** (Claude works, Gemini reviews summaries) and **Code Review** (Gemini checks code quality with severity markers). Issues feed back into implementation until resolved.
 
 ## Install
 
@@ -27,7 +27,7 @@ The loop has two phases: **Implementation** (Claude works, Codex reviews summari
 /plugin install humanize@humania
 ```
 
-Requires [codex CLI](https://github.com/openai/codex) for review. See the full [Installation Guide](docs/install-for-claude.md) for prerequisites and alternative setup options.
+Requires Gemini CLI for review. See the full [Installation Guide](docs/install-for-claude.md) for prerequisites and alternative setup options.
 
 ## Quick Start
 

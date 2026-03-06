@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-- [codex](https://github.com/openai/codex) -- OpenAI Codex CLI (for review). Verify with `codex --version`.
+- Gemini CLI -- Google Gemini CLI (for review). Verify with `gemini --version`.
 - `jq` -- JSON processor. Verify with `jq --version`.
 - `git` -- Git version control. Verify with `git --version`.
 
@@ -33,7 +33,7 @@ After installing, you should see Humanize commands available:
 ```
 /humanize:start-rlcr-loop
 /humanize:gen-plan
-/humanize:ask-codex
+/humanize:ask-gemini
 ```
 
 ## Monitor Setup (Optional)

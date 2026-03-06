@@ -1,6 +1,6 @@
 ---
 description: "Start iterative loop with Codex review"
-argument-hint: "[path/to/plan.md | --plan-file path/to/plan.md] [--max N] [--codex-model MODEL:EFFORT] [--codex-timeout SECONDS] [--track-plan-file] [--push-every-round] [--base-branch BRANCH] [--full-review-round N] [--skip-impl] [--claude-answer-codex] [--agent-teams]"
+argument-hint: "[path/to/plan.md | --plan-file path/to/plan.md] [--max N] [--gemini-model MODEL] [--gemini-timeout SECONDS] [--track-plan-file] [--push-every-round] [--base-branch BRANCH] [--full-review-round N] [--skip-impl] [--claude-answer-gemini] [--agent-teams]"
 allowed-tools:
   - "Bash(${CLAUDE_PLUGIN_ROOT}/scripts/setup-rlcr-loop.sh:*)"
   - "Read"
@@ -22,7 +22,7 @@ Before running the setup script, validate the plan file for compliance. This is 
 
 Parse `$ARGUMENTS` to find the plan file path:
 - If `--plan-file <path>` is present, use `<path>`
-- Otherwise, use the first positional argument (the first argument that does not start with `--` and is not a value following a known flag like `--max`, `--codex-model`, `--codex-timeout`, `--base-branch`, `--full-review-round`, `--plan-file`)
+- Otherwise, use the first positional argument (the first argument that does not start with `--` and is not a value following a known flag like `--max`, `--gemini-model`, `--gemini-timeout`, `--base-branch`, `--full-review-round`, `--plan-file`)
 - If no plan file path can be determined, skip the pre-check and let the setup script handle the error
 
 ### Basic path safety gate
@@ -69,10 +69,10 @@ This command starts an iterative development loop where:
 
 1. You work on the implementation plan provided
 2. Write a summary of your work to the specified summary file
-3. When you try to exit, Codex reviews your summary
-4. If Codex finds issues, you receive feedback and continue
-5. If Codex outputs "COMPLETE", the loop enters **Review Phase**
-6. In Review Phase, `codex review --base <branch>` performs code review
+3. When you try to exit, Gemini reviews your summary
+4. If Gemini finds issues, you receive feedback and continue
+5. If Gemini outputs "COMPLETE", the loop enters **Review Phase**
+6. In Review Phase, Gemini performs a git-diff-based code review
 7. If code review finds issues (`[P0-9]` markers), you fix them and continue
 8. When no issues are found, the loop ends with a Finalize Phase
 
@@ -88,7 +88,7 @@ This loop uses a **Goal Tracker** to prevent goal drift across iterations:
 1. **Acceptance Criteria**: Each task maps to a specific AC - nothing can be "forgotten"
 2. **Plan Evolution Log**: If you discover the plan needs changes, document the change with justification
 3. **Explicit Deferrals**: Deferred tasks require strong justification and impact analysis
-4. **Full Alignment Checks**: At configurable intervals (default every 5 rounds: rounds 4, 9, 14, etc.), Codex conducts a comprehensive goal alignment audit. Use `--full-review-round N` to customize (min: 2)
+4. **Full Alignment Checks**: At configurable intervals (default every 5 rounds: rounds 4, 9, 14, etc.), Gemini conducts a comprehensive goal alignment audit. Use `--full-review-round N` to customize (min: 2)
 
 ### How to Use
 1. **Round 0**: Initialize the Goal Tracker with Ultimate Goal and Acceptance Criteria
@@ -101,20 +101,20 @@ This loop uses a **Goal Tracker** to prevent goal drift across iterations:
 2. **Maintain Goal Tracker**: Keep goal-tracker.md up-to-date with your progress
 3. **Be thorough**: Include details about what was implemented, files changed, and tests added
 4. **No cheating**: Do not try to exit the loop by editing state files or running cancel commands
-5. **Trust the process**: Codex's feedback helps improve the implementation
+5. **Trust the process**: Gemini's feedback helps improve the implementation
 
 ## Stopping the Loop
 
 - Reach the maximum iteration count
-- Codex confirms completion with "COMPLETE", followed by successful code review (no `[P0-9]` issues)
+- Gemini confirms completion with "COMPLETE", followed by successful code review (no `[P0-9]` issues)
 - User runs `/humanize:cancel-rlcr-loop`
 
 ## Two-Phase System
 
 The RLCR loop has two phases within the active loop:
 
-1. **Implementation Phase**: Work on the plan, Codex reviews your summary
-2. **Review Phase**: After COMPLETE, `codex review` checks code quality with `[P0-9]` severity markers
+1. **Implementation Phase**: Work on the plan, Gemini reviews your summary
+2. **Review Phase**: After COMPLETE, Gemini checks code quality via git diff with `[P0-9]` severity markers
 
 The `--base-branch` option specifies the base branch for code review comparison. If not provided, it auto-detects from: remote default > local main > local master.
 
